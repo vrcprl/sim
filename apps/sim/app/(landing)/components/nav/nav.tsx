@@ -1,16 +1,16 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { createLogger } from '@sim/logger'
 import { ArrowRight, ChevronRight } from 'lucide-react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { GithubIcon } from '@/components/icons'
 import { useBrandConfig } from '@/lib/branding/branding'
-import { isHosted } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
+import { isHosted } from '@/lib/core/config/feature-flags'
+import { soehne } from '@/app/_styles/fonts/soehne/soehne'
 import { getFormattedGitHubStars } from '@/app/(landing)/actions/github'
-import { soehne } from '@/app/fonts/soehne/soehne'
 
 const logger = createLogger('nav')
 
@@ -20,7 +20,7 @@ interface NavProps {
 }
 
 export default function Nav({ hideAuthButtons = false, variant = 'landing' }: NavProps = {}) {
-  const [githubStars, setGithubStars] = useState('16.3k')
+  const [githubStars, setGithubStars] = useState('25.1k')
   const [isHovered, setIsHovered] = useState(false)
   const [isLoginHovered, setIsLoginHovered] = useState(false)
   const router = useRouter()
@@ -71,7 +71,7 @@ export default function Nav({ hideAuthButtons = false, variant = 'landing' }: Na
       </li>
       <li>
         <Link
-          href='#pricing'
+          href='/?from=nav#pricing'
           className='text-[16px] text-muted-foreground transition-colors hover:text-foreground'
           scroll={true}
         >
@@ -87,6 +87,14 @@ export default function Nav({ hideAuthButtons = false, variant = 'landing' }: Na
         >
           Enterprise
         </button>
+      </li>
+      <li>
+        <Link
+          href='/careers'
+          className='text-[16px] text-muted-foreground transition-colors hover:text-foreground'
+        >
+          Careers
+        </Link>
       </li>
       <li>
         <a
@@ -113,7 +121,7 @@ export default function Nav({ hideAuthButtons = false, variant = 'landing' }: Na
       itemType='https://schema.org/SiteNavigationElement'
     >
       <div className='flex items-center gap-[34px]'>
-        <Link href='/' aria-label={`${brand.name} home`} itemProp='url'>
+        <Link href='/?from=nav' aria-label={`${brand.name} home`} itemProp='url'>
           <span itemProp='name' className='sr-only'>
             {brand.name} Home
           </span>
@@ -127,6 +135,7 @@ export default function Nav({ hideAuthButtons = false, variant = 'landing' }: Na
               priority
               loading='eager'
               quality={100}
+              unoptimized
             />
           ) : (
             <Image

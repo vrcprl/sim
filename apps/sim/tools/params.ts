@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { ParameterVisibility, ToolConfig } from '@/tools/types'
 import { getTool } from '@/tools/utils'
 
 const logger = createLogger('ToolsParams')
+type ToolParamDefinition = ToolConfig['params'][string]
 
 export interface Option {
   label: string
@@ -11,7 +12,8 @@ export interface Option {
 
 export interface ComponentCondition {
   field: string
-  value: string
+  value: string | number | boolean | Array<string | number | boolean>
+  not?: boolean
 }
 
 export interface UIComponentConfig {
@@ -21,9 +23,7 @@ export interface UIComponentConfig {
   password?: boolean
   condition?: ComponentCondition
   title?: string
-  layout?: string
   value?: unknown
-  provider?: string
   serviceId?: string
   requiredScopes?: string[]
   mimeType?: string
@@ -36,7 +36,9 @@ export interface UIComponentConfig {
   generationType?: string
   acceptedTypes?: string[]
   multiple?: boolean
+  multiSelect?: boolean
   maxSize?: number
+  dependsOn?: string[]
 }
 
 export interface SubBlockConfig {
@@ -47,9 +49,7 @@ export interface SubBlockConfig {
   placeholder?: string
   password?: boolean
   condition?: ComponentCondition
-  layout?: string
   value?: unknown
-  provider?: string
   serviceId?: string
   requiredScopes?: string[]
   mimeType?: string
@@ -63,6 +63,7 @@ export interface SubBlockConfig {
   acceptedTypes?: string[]
   multiple?: boolean
   maxSize?: number
+  dependsOn?: string[]
 }
 
 export interface BlockConfig {
@@ -73,6 +74,9 @@ export interface BlockConfig {
 export interface SchemaProperty {
   type: string
   description: string
+  items?: Record<string, any>
+  properties?: Record<string, SchemaProperty>
+  required?: string[]
 }
 
 export interface ToolSchema {
@@ -107,6 +111,12 @@ export interface ToolWithParameters {
 }
 
 let blockConfigCache: Record<string, BlockConfig> | null = null
+
+const workflowInputFieldsCache = new Map<
+  string,
+  { fields: Array<{ name: string; type: string }>; timestamp: number }
+>()
+const WORKFLOW_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
 function getBlockConfigurations(): Record<string, BlockConfig> {
   if (!blockConfigCache) {
@@ -144,6 +154,51 @@ export function getToolParametersConfig(
     if (!toolConfig.params || typeof toolConfig.params !== 'object') {
       logger.warn(`Tool ${toolId} has invalid params configuration`)
       return null
+    }
+
+    // Special handling for workflow_executor tool
+    if (toolId === 'workflow_executor') {
+      const parameters: ToolParameterConfig[] = [
+        {
+          id: 'workflowId',
+          type: 'string',
+          required: true,
+          visibility: 'user-only',
+          description: 'The ID of the workflow to execute',
+          uiComponent: {
+            type: 'workflow-selector',
+            placeholder: 'Select workflow to execute',
+          },
+        },
+        {
+          id: 'inputMapping',
+          type: 'object',
+          required: false,
+          visibility: 'user-or-llm',
+          description: 'Map inputs to the selected workflow',
+          uiComponent: {
+            type: 'workflow-input-mapper',
+            title: 'Workflow Inputs',
+            condition: {
+              field: 'workflowId',
+              value: '',
+              not: true, // Show when workflowId is not empty
+            },
+          },
+        },
+      ]
+
+      return {
+        toolConfig,
+        allParameters: parameters,
+        userInputParameters: parameters.filter(
+          (param) => param.visibility === 'user-or-llm' || param.visibility === 'user-only'
+        ),
+        requiredParameters: parameters.filter((param) => param.required),
+        optionalParameters: parameters.filter(
+          (param) => param.visibility === 'user-only' && !param.required
+        ),
+      }
     }
 
     // Get block configuration for UI component information
@@ -223,9 +278,7 @@ export function getToolParametersConfig(
               password: subBlock.password,
               condition: subBlock.condition,
               title: subBlock.title,
-              layout: subBlock.layout,
               value: subBlock.value,
-              provider: subBlock.provider,
               serviceId: subBlock.serviceId,
               requiredScopes: subBlock.requiredScopes,
               mimeType: subBlock.mimeType,
@@ -239,6 +292,7 @@ export function getToolParametersConfig(
               acceptedTypes: subBlock.acceptedTypes,
               multiple: subBlock.multiple,
               maxSize: subBlock.maxSize,
+              dependsOn: subBlock.dependsOn,
             }
           }
         }
@@ -276,10 +330,63 @@ export function getToolParametersConfig(
 /**
  * Creates a tool schema for LLM with user-provided parameters excluded
  */
-export function createLLMToolSchema(
+function buildParameterSchema(
+  toolId: string,
+  paramId: string,
+  param: ToolParamDefinition
+): SchemaProperty {
+  let schemaType = param.type
+  if (schemaType === 'json' || schemaType === 'any') {
+    schemaType = 'object'
+  }
+
+  const propertySchema: SchemaProperty = {
+    type: schemaType,
+    description: param.description || '',
+  }
+
+  if (param.type === 'array' && param.items) {
+    propertySchema.items = {
+      ...param.items,
+      ...(param.items.properties && {
+        properties: { ...param.items.properties },
+      }),
+    }
+  } else if (param.items) {
+    logger.warn(`items property ignored for non-array param "${paramId}" in tool "${toolId}"`)
+  }
+
+  return propertySchema
+}
+
+export function createUserToolSchema(toolConfig: ToolConfig): ToolSchema {
+  const schema: ToolSchema = {
+    type: 'object',
+    properties: {},
+    required: [],
+  }
+
+  for (const [paramId, param] of Object.entries(toolConfig.params)) {
+    const visibility = param.visibility ?? 'user-or-llm'
+    if (visibility === 'hidden') {
+      continue
+    }
+
+    const propertySchema = buildParameterSchema(toolConfig.id, paramId, param)
+    schema.properties[paramId] = propertySchema
+
+    if (param.required) {
+      schema.required.push(paramId)
+    }
+  }
+
+  return schema
+}
+
+export async function createLLMToolSchema(
   toolConfig: ToolConfig,
   userProvidedParams: Record<string, unknown>
-): ToolSchema {
+): Promise<ToolSchema> {
   const schema: ToolSchema = {
     type: 'object',
     properties: {},
@@ -287,45 +394,149 @@ export function createLLMToolSchema(
   }
 
   // Only include parameters that the LLM should/can provide
-  Object.entries(toolConfig.params).forEach(([paramId, param]) => {
-    const isUserProvided =
-      userProvidedParams[paramId] !== undefined &&
-      userProvidedParams[paramId] !== null &&
-      userProvidedParams[paramId] !== ''
+  for (const [paramId, param] of Object.entries(toolConfig.params)) {
+    // Special handling for workflow_executor's inputMapping parameter
+    // Always include in LLM schema so LLM can provide dynamic input values
+    // even if user has configured empty/partial inputMapping in the UI
+    const isWorkflowInputMapping =
+      toolConfig.id === 'workflow_executor' && paramId === 'inputMapping'
 
-    // Skip parameters that user has already provided
-    if (isUserProvided) {
-      return
-    }
+    if (!isWorkflowInputMapping) {
+      const isUserProvided =
+        userProvidedParams[paramId] !== undefined &&
+        userProvidedParams[paramId] !== null &&
+        userProvidedParams[paramId] !== ''
 
-    // Skip parameters that are user-only (never shown to LLM)
-    if (param.visibility === 'user-only') {
-      return
-    }
+      // Skip parameters that user has already provided
+      if (isUserProvided) {
+        continue
+      }
 
-    // Skip hidden parameters
-    if (param.visibility === 'hidden') {
-      return
+      // Skip parameters that are user-only (never shown to LLM)
+      if (param.visibility === 'user-only') {
+        continue
+      }
+
+      // Skip hidden parameters
+      if (param.visibility === 'hidden') {
+        continue
+      }
     }
 
     // Add parameter to LLM schema
-    let schemaType = param.type
-    if (param.type === 'json' || param.type === 'any') {
-      schemaType = 'object'
+    const propertySchema = buildParameterSchema(toolConfig.id, paramId, param)
+
+    // Apply dynamic schema enrichment for workflow_executor's inputMapping
+    if (isWorkflowInputMapping) {
+      const workflowId = userProvidedParams.workflowId as string
+      if (workflowId) {
+        await applyDynamicSchemaForWorkflow(propertySchema, workflowId)
+      }
     }
 
-    schema.properties[paramId] = {
-      type: schemaType,
-      description: param.description || '',
-    }
+    schema.properties[paramId] = propertySchema
 
     // Add to required if LLM must provide it and it's originally required
     if ((param.visibility === 'user-or-llm' || param.visibility === 'llm-only') && param.required) {
       schema.required.push(paramId)
     }
-  })
+  }
 
   return schema
+}
+
+/**
+ * Apply dynamic schema enrichment for workflow_executor's inputMapping parameter
+ */
+async function applyDynamicSchemaForWorkflow(
+  propertySchema: any,
+  workflowId: string
+): Promise<void> {
+  try {
+    const workflowInputFields = await fetchWorkflowInputFields(workflowId)
+
+    if (workflowInputFields && workflowInputFields.length > 0) {
+      propertySchema.type = 'object'
+      propertySchema.properties = {}
+      propertySchema.required = []
+
+      // Convert workflow input fields to JSON schema properties
+      for (const field of workflowInputFields) {
+        propertySchema.properties[field.name] = {
+          type: field.type || 'string',
+          description: `Input field: ${field.name}`,
+        }
+        propertySchema.required.push(field.name)
+      }
+
+      // Update description to be more specific
+      propertySchema.description = `Input values for the workflow. Required fields: ${workflowInputFields.map((f) => f.name).join(', ')}`
+    }
+  } catch (error) {
+    logger.error('Failed to fetch workflow input fields for LLM schema:', error)
+  }
+}
+
+/**
+ * Helper function to fetch workflow input fields with caching
+ */
+async function fetchWorkflowInputFields(
+  workflowId: string
+): Promise<Array<{ name: string; type: string }>> {
+  const cached = workflowInputFieldsCache.get(workflowId)
+  const now = Date.now()
+
+  if (cached && now - cached.timestamp < WORKFLOW_CACHE_TTL) {
+    return cached.fields
+  }
+
+  try {
+    const { buildAuthHeaders, buildAPIUrl } = await import('@/executor/utils/http')
+
+    const headers = await buildAuthHeaders()
+    const url = buildAPIUrl(`/api/workflows/${workflowId}`)
+
+    const response = await fetch(url.toString(), { headers })
+    if (!response.ok) {
+      throw new Error('Failed to fetch workflow')
+    }
+
+    const { data } = await response.json()
+    if (!data?.state?.blocks) {
+      return []
+    }
+
+    const blocks = data.state.blocks as Record<string, any>
+    const triggerEntry = Object.entries(blocks).find(
+      ([, block]) =>
+        block.type === 'start_trigger' || block.type === 'input_trigger' || block.type === 'starter'
+    )
+
+    if (!triggerEntry) {
+      return []
+    }
+
+    const triggerBlock = triggerEntry[1]
+    const inputFormat = triggerBlock.subBlocks?.inputFormat?.value
+
+    let fields: Array<{ name: string; type: string }> = []
+
+    if (Array.isArray(inputFormat)) {
+      fields = inputFormat
+        .filter((field: any) => field.name && typeof field.name === 'string')
+        .map((field: any) => ({
+          name: field.name,
+          type: field.type || 'string',
+        }))
+    }
+
+    workflowInputFieldsCache.set(workflowId, { fields, timestamp: now })
+
+    return fields
+  } catch (error) {
+    logger.error('Error fetching workflow input fields:', error)
+    return []
+  }
 }
 
 /**
@@ -339,10 +550,26 @@ export function createExecutionToolSchema(toolConfig: ToolConfig): ToolSchema {
   }
 
   Object.entries(toolConfig.params).forEach(([paramId, param]) => {
-    schema.properties[paramId] = {
+    const propertySchema: any = {
       type: param.type === 'json' ? 'object' : param.type,
       description: param.description || '',
     }
+
+    // Include items property for arrays
+    if (param.type === 'array' && param.items) {
+      propertySchema.items = {
+        ...param.items,
+        ...(param.items.properties && {
+          properties: { ...param.items.properties },
+        }),
+      }
+    } else if (param.items) {
+      logger.warn(
+        `items property ignored for non-array param "${paramId}" in tool "${toolConfig.id}"`
+      )
+    }
+
+    schema.properties[paramId] = propertySchema
 
     if (param.required) {
       schema.required.push(paramId)
@@ -353,17 +580,98 @@ export function createExecutionToolSchema(toolConfig: ToolConfig): ToolSchema {
 }
 
 /**
- * Merges user-provided parameters with LLM-generated parameters
+ * Deep merges inputMapping objects, where LLM values fill in empty/missing user values.
+ * User-provided non-empty values take precedence.
+ */
+export function deepMergeInputMapping(
+  llmInputMapping: Record<string, unknown> | undefined,
+  userInputMapping: Record<string, unknown> | string | undefined
+): Record<string, unknown> {
+  // Parse user inputMapping if it's a JSON string
+  let parsedUserMapping: Record<string, unknown> = {}
+  if (typeof userInputMapping === 'string') {
+    try {
+      const parsed = JSON.parse(userInputMapping)
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        parsedUserMapping = parsed
+      }
+    } catch {
+      // Invalid JSON, treat as empty
+    }
+  } else if (
+    typeof userInputMapping === 'object' &&
+    userInputMapping !== null &&
+    !Array.isArray(userInputMapping)
+  ) {
+    parsedUserMapping = userInputMapping
+  }
+
+  // If no LLM mapping, return user mapping (or empty)
+  if (!llmInputMapping || typeof llmInputMapping !== 'object') {
+    return parsedUserMapping
+  }
+
+  // Deep merge: LLM values as base, user non-empty values override
+  // If user provides empty object {}, LLM values fill all fields (intentional)
+  const merged: Record<string, unknown> = { ...llmInputMapping }
+
+  for (const [key, userValue] of Object.entries(parsedUserMapping)) {
+    // Only override LLM value if user provided a non-empty value
+    // Note: Using strict inequality (!==) so 0 and false are correctly preserved
+    if (userValue !== undefined && userValue !== null && userValue !== '') {
+      merged[key] = userValue
+    }
+  }
+
+  return merged
+}
+
+/**
+ * Merges user-provided parameters with LLM-generated parameters.
+ * User-provided parameters take precedence, but empty strings are skipped
+ * so that LLM-generated values are used when user clears a field.
+ *
+ * Special handling for inputMapping: deep merges so LLM can fill in
+ * fields that user left empty in the UI.
  */
 export function mergeToolParameters(
   userProvidedParams: Record<string, unknown>,
   llmGeneratedParams: Record<string, unknown>
 ): Record<string, unknown> {
-  // User-provided parameters take precedence
-  return {
-    ...llmGeneratedParams,
-    ...userProvidedParams,
+  // Filter out empty strings from user-provided params
+  // so that cleared fields don't override LLM values
+  const filteredUserParams: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(userProvidedParams)) {
+    if (value !== undefined && value !== null && value !== '') {
+      filteredUserParams[key] = value
+    }
   }
+
+  // Start with LLM params as base
+  const result: Record<string, unknown> = { ...llmGeneratedParams }
+
+  // Apply user params, with special handling for inputMapping
+  for (const [key, userValue] of Object.entries(filteredUserParams)) {
+    if (key === 'inputMapping') {
+      // Deep merge inputMapping so LLM values fill in empty user fields
+      const llmInputMapping = llmGeneratedParams.inputMapping as Record<string, unknown> | undefined
+      const mergedInputMapping = deepMergeInputMapping(
+        llmInputMapping,
+        userValue as Record<string, unknown> | string | undefined
+      )
+      result.inputMapping = mergedInputMapping
+    } else {
+      // Normal override for other params
+      result[key] = userValue
+    }
+  }
+
+  // If LLM provided inputMapping but user didn't, ensure it's included
+  if (llmGeneratedParams.inputMapping && !filteredUserParams.inputMapping) {
+    result.inputMapping = llmGeneratedParams.inputMapping
+  }
+
+  return result
 }
 
 /**

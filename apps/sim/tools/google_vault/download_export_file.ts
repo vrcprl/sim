@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('GoogleVaultDownloadExportFileTool')
@@ -20,11 +20,6 @@ export const downloadExportFileTool: ToolConfig<DownloadParams> = {
   oauth: {
     required: true,
     provider: 'google-vault',
-    additionalScopes: [
-      'https://www.googleapis.com/auth/ediscovery',
-      // Required to fetch the object bytes from the Cloud Storage bucket that Vault uses
-      'https://www.googleapis.com/auth/devstorage.read_only',
-    ],
   },
 
   params: {

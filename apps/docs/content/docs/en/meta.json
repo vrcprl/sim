@@ -3,7 +3,6 @@
   "pages": [
     "./introduction/index",
     "./getting-started/index",
-    "---Building Workflows---",
     "triggers",
     "blocks",
     "tools",
@@ -11,15 +10,13 @@
     "mcp",
     "copilot",
     "knowledgebase",
-    "---Configuration---",
     "variables",
-    "---Execution---",
     "execution",
-    "---Advanced---",
     "permissions",
-    "yaml",
-    "---SDKs---",
-    "sdks"
+    "sdks",
+    "self-hosting",
+    "./enterprise/index",
+    "./keyboard-shortcuts/index"
   ],
   "defaultOpen": false
 }

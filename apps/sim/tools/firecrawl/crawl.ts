@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { FirecrawlCrawlParams, FirecrawlCrawlResponse } from '@/tools/firecrawl/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -39,20 +39,42 @@ export const crawlTool: ToolConfig<FirecrawlCrawlParams, FirecrawlCrawlResponse>
     },
   },
   request: {
-    url: 'https://api.firecrawl.dev/v1/crawl',
+    url: 'https://api.firecrawl.dev/v2/crawl',
     method: 'POST',
     headers: (params) => ({
       'Content-Type': 'application/json',
       Authorization: `Bearer ${params.apiKey}`,
     }),
-    body: (params) => ({
-      url: params.url,
-      limit: Number(params.limit) || 100,
-      scrapeOptions: {
-        formats: ['markdown'],
-        onlyMainContent: params.onlyMainContent || false,
-      },
-    }),
+    body: (params) => {
+      const body: Record<string, any> = {
+        url: params.url,
+        limit: Number(params.limit) || 100,
+        scrapeOptions: params.scrapeOptions || {
+          formats: ['markdown'],
+          onlyMainContent: params.onlyMainContent || false,
+        },
+      }
+
+      if (params.prompt) body.prompt = params.prompt
+      if (params.maxDiscoveryDepth) body.maxDiscoveryDepth = Number(params.maxDiscoveryDepth)
+      if (params.sitemap) body.sitemap = params.sitemap
+      if (typeof params.crawlEntireDomain === 'boolean')
+        body.crawlEntireDomain = params.crawlEntireDomain
+      if (typeof params.allowExternalLinks === 'boolean')
+        body.allowExternalLinks = params.allowExternalLinks
+      if (typeof params.allowSubdomains === 'boolean') body.allowSubdomains = params.allowSubdomains
+      if (typeof params.ignoreQueryParameters === 'boolean')
+        body.ignoreQueryParameters = params.ignoreQueryParameters
+      if (params.delay) body.delay = Number(params.delay)
+      if (params.maxConcurrency) body.maxConcurrency = Number(params.maxConcurrency)
+      if (params.excludePaths) body.excludePaths = params.excludePaths
+      if (params.includePaths) body.includePaths = params.includePaths
+      if (params.webhook) body.webhook = params.webhook
+      if (typeof params.zeroDataRetention === 'boolean')
+        body.zeroDataRetention = params.zeroDataRetention
+
+      return body
+    },
   },
   transformResponse: async (response: Response) => {
     const data = await response.json()
@@ -79,10 +101,11 @@ export const crawlTool: ToolConfig<FirecrawlCrawlParams, FirecrawlCrawlResponse>
 
     while (elapsedTime < MAX_POLL_TIME_MS) {
       try {
-        const statusResponse = await fetch(`/api/tools/firecrawl/crawl/${jobId}`, {
+        const statusResponse = await fetch(`https://api.firecrawl.dev/v2/crawl/${jobId}`, {
           method: 'GET',
           headers: {
             Authorization: `Bearer ${params.apiKey}`,
+            'Content-Type': 'application/json',
           },
         })
 

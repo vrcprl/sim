@@ -1,10 +1,12 @@
 import { db } from '@sim/db'
 import { copilotChats, document, knowledgeBase, templates } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, isNull } from 'drizzle-orm'
-import { createLogger } from '@/lib/logs/console/logger'
-import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/db-helpers'
-import { sanitizeForCopilot } from '@/lib/workflows/json-sanitizer'
-import type { ChatContext } from '@/stores/copilot/types'
+import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/persistence/utils'
+import { sanitizeForCopilot } from '@/lib/workflows/sanitization/json-sanitizer'
+import { escapeRegExp } from '@/executor/constants'
+import { getUserPermissionConfig } from '@/executor/utils/permission-check'
+import type { ChatContext } from '@/stores/panel/copilot/types'
 
 export type AgentContextType =
   | 'past_chat'
@@ -103,7 +105,11 @@ export async function processContextsServer(
         )
       }
       if (ctx.kind === 'blocks' && (ctx as any).blockId) {
-        return await processBlockMetadata((ctx as any).blockId, ctx.label ? `@${ctx.label}` : '@')
+        return await processBlockMetadata(
+          (ctx as any).blockId,
+          ctx.label ? `@${ctx.label}` : '@',
+          userId
+        )
       }
       if (ctx.kind === 'templates' && (ctx as any).templateId) {
         return await processTemplateFromDb(
@@ -151,10 +157,6 @@ export async function processContextsServer(
     kinds: Array.from(filtered.reduce((s, r) => s.add(r.type), new Set<string>())),
   })
   return filtered
-}
-
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function sanitizeMessageForDocs(rawMessage: string, contexts: ChatContext[] | undefined): string {
@@ -358,8 +360,21 @@ async function processKnowledgeFromDb(
   }
 }
 
-async function processBlockMetadata(blockId: string, tag: string): Promise<AgentContext | null> {
+async function processBlockMetadata(
+  blockId: string,
+  tag: string,
+  userId?: string
+): Promise<AgentContext | null> {
   try {
+    if (userId) {
+      const permissionConfig = await getUserPermissionConfig(userId)
+      const allowedIntegrations = permissionConfig?.allowedIntegrations
+      if (allowedIntegrations != null && !allowedIntegrations.includes(blockId)) {
+        logger.debug('Block not allowed by permission group', { blockId, userId })
+        return null
+      }
+    }
+
     // Reuse registry to match get_blocks_metadata tool result
     const { registry: blockRegistry } = await import('@/blocks/registry')
     const { tools: toolsRegistry } = await import('@/tools/registry')
@@ -427,9 +442,7 @@ async function processTemplateFromDb(
       .select({
         id: templates.id,
         name: templates.name,
-        description: templates.description,
-        category: templates.category,
-        author: templates.author,
+        details: templates.details,
         stars: templates.stars,
         state: templates.state,
       })
@@ -438,14 +451,11 @@ async function processTemplateFromDb(
       .limit(1)
     const t = rows?.[0]
     if (!t) return null
-    const workflowState = (t as any).state || {}
-    // Match get-user-workflow format: just the workflow state JSON
+    const workflowState = t.state || {}
     const summary = {
       id: t.id,
       name: t.name,
-      description: t.description || '',
-      category: t.category,
-      author: t.author,
+      description: (t.details as any)?.tagline || '',
       stars: t.stars || 0,
       workflow: workflowState,
     }

@@ -1,7 +1,8 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateImageUrl } from '@/lib/security/input-validation'
-import { generateRequestId } from '@/lib/utils'
+import { checkHybridAuth } from '@/lib/auth/hybrid'
+import { validateImageUrl } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
 
 const logger = createLogger('ImageProxyAPI')
 
@@ -13,6 +14,12 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const imageUrl = url.searchParams.get('url')
   const requestId = generateRequestId()
+
+  const authResult = await checkHybridAuth(request, { requireWorkflowId: false })
+  if (!authResult.success) {
+    logger.error(`[${requestId}] Authentication failed for image proxy:`, authResult.error)
+    return new NextResponse('Unauthorized', { status: 401 })
+  }
 
   if (!imageUrl) {
     logger.error(`[${requestId}] Missing 'url' parameter`)

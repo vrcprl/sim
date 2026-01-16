@@ -15,7 +15,6 @@ export const notionReadDatabaseTool: ToolConfig<NotionReadDatabaseParams, Notion
   oauth: {
     required: true,
     provider: 'notion',
-    additionalScopes: ['workspace.content', 'database.read'],
   },
 
   params: {
@@ -35,13 +34,7 @@ export const notionReadDatabaseTool: ToolConfig<NotionReadDatabaseParams, Notion
 
   request: {
     url: (params: NotionReadDatabaseParams) => {
-      // Format database ID with hyphens if needed
-      const formattedId = params.databaseId.replace(
-        /(.{8})(.{4})(.{4})(.{4})(.{12})/,
-        '$1-$2-$3-$4-$5'
-      )
-
-      return `https://api.notion.com/v1/databases/${formattedId}`
+      return `https://api.notion.com/v1/databases/${params.databaseId}`
     },
     method: 'GET',
     headers: (params: NotionReadDatabaseParams) => {
@@ -106,5 +99,57 @@ export const notionReadDatabaseTool: ToolConfig<NotionReadDatabaseParams, Notion
       type: 'object',
       description: 'Database metadata including title, ID, URL, timestamps, and properties schema',
     },
+  },
+}
+
+// V2 Tool with API-aligned outputs
+interface NotionReadDatabaseV2Response {
+  success: boolean
+  output: {
+    id: string
+    title: string
+    url: string
+    created_time: string
+    last_edited_time: string
+    properties: Record<string, any>
+  }
+}
+
+export const notionReadDatabaseV2Tool: ToolConfig<
+  NotionReadDatabaseParams,
+  NotionReadDatabaseV2Response
+> = {
+  id: 'notion_read_database_v2',
+  name: 'Read Notion Database',
+  description: 'Read database information and structure from Notion',
+  version: '2.0.0',
+  oauth: notionReadDatabaseTool.oauth,
+  params: notionReadDatabaseTool.params,
+  request: notionReadDatabaseTool.request,
+
+  transformResponse: async (response: Response) => {
+    const data = await response.json()
+    const title = data.title?.map((t: any) => t.plain_text || '').join('') || 'Untitled Database'
+
+    return {
+      success: true,
+      output: {
+        id: data.id,
+        title,
+        url: data.url,
+        created_time: data.created_time,
+        last_edited_time: data.last_edited_time,
+        properties: data.properties || {},
+      },
+    }
+  },
+
+  outputs: {
+    id: { type: 'string', description: 'Database ID' },
+    title: { type: 'string', description: 'Database title' },
+    url: { type: 'string', description: 'Database URL' },
+    created_time: { type: 'string', description: 'Creation timestamp' },
+    last_edited_time: { type: 'string', description: 'Last edit timestamp' },
+    properties: { type: 'object', description: 'Database properties schema' },
   },
 }

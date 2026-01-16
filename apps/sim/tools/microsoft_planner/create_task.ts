@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerCreateResponse,
   MicrosoftPlannerToolParams,
@@ -20,7 +20,6 @@ export const createTaskTool: ToolConfig<
   oauth: {
     required: true,
     provider: 'microsoft-planner',
-    additionalScopes: [],
   },
 
   params: {
@@ -94,15 +93,23 @@ export const createTaskTool: ToolConfig<
         title: params.title,
       }
 
-      if (params.bucketId) {
+      if (params.bucketId !== undefined && params.bucketId !== null && params.bucketId !== '') {
         body.bucketId = params.bucketId
       }
 
-      if (params.dueDateTime) {
+      if (
+        params.dueDateTime !== undefined &&
+        params.dueDateTime !== null &&
+        params.dueDateTime !== ''
+      ) {
         body.dueDateTime = params.dueDateTime
       }
 
-      if (params.assigneeUserId) {
+      if (
+        params.assigneeUserId !== undefined &&
+        params.assigneeUserId !== null &&
+        params.assigneeUserId !== ''
+      ) {
         body.assignments = {
           [params.assigneeUserId]: {
             '@odata.type': 'microsoft.graph.plannerAssignment',
@@ -138,6 +145,14 @@ export const createTaskTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether the task was created successfully' },
     task: { type: 'object', description: 'The created task object with all properties' },
-    metadata: { type: 'object', description: 'Metadata including planId, taskId, and taskUrl' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including planId, taskId, and taskUrl',
+      properties: {
+        planId: { type: 'string', description: 'Parent plan ID' },
+        taskId: { type: 'string', description: 'Created task ID' },
+        taskUrl: { type: 'string', description: 'Microsoft Graph API URL for the task' },
+      },
+    },
   },
 }

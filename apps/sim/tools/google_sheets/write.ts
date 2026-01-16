@@ -10,7 +10,6 @@ export const writeTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsWriteResp
   oauth: {
     required: true,
     provider: 'google-sheets',
-    additionalScopes: [],
   },
 
   params: {
@@ -23,20 +22,21 @@ export const writeTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsWriteResp
     spreadsheetId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the spreadsheet to write to',
+      visibility: 'user-or-llm',
+      description: 'The ID of the spreadsheet',
     },
     range: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'The range of cells to write to',
+      description: 'The A1 notation range to write to (e.g. "Sheet1!A1:D10", "A1:B5")',
     },
     values: {
       type: 'array',
       required: true,
       visibility: 'user-or-llm',
-      description: 'The data to write to the spreadsheet',
+      description:
+        'The data to write as a 2D array (e.g. [["Name", "Age"], ["Alice", 30], ["Bob", 25]]) or array of objects.',
     },
     valueInputOption: {
       type: 'string',
@@ -167,6 +167,13 @@ export const writeTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsWriteResp
     updatedRows: { type: 'number', description: 'Number of rows updated' },
     updatedColumns: { type: 'number', description: 'Number of columns updated' },
     updatedCells: { type: 'number', description: 'Number of cells updated' },
-    metadata: { type: 'json', description: 'Spreadsheet metadata including ID and URL' },
+    metadata: {
+      type: 'json',
+      description: 'Spreadsheet metadata including ID and URL',
+      properties: {
+        spreadsheetId: { type: 'string', description: 'Google Sheets spreadsheet ID' },
+        spreadsheetUrl: { type: 'string', description: 'Spreadsheet URL' },
+      },
+    },
   },
 }

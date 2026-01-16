@@ -1,9 +1,9 @@
 import { db, workflowDeploymentVersion } from '@sim/db'
+import { createLogger } from '@sim/logger'
 import { and, desc, eq } from 'drizzle-orm'
 import type { NextRequest, NextResponse } from 'next/server'
 import { verifyInternalToken } from '@/lib/auth/internal'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { validateWorkflowPermissions } from '@/lib/workflows/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -29,7 +29,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1]
-      isInternalCall = await verifyInternalToken(token)
+      const verification = await verifyInternalToken(token)
+      isInternalCall = verification.valid
     }
 
     if (!isInternalCall) {

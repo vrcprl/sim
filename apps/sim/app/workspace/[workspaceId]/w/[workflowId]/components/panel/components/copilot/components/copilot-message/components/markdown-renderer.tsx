@@ -1,11 +1,16 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { memo, useCallback, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Code, Tooltip } from '@/components/emcn'
 
+/**
+ * Recursively extracts text content from React elements
+ * @param element - React node to extract text from
+ * @returns Concatenated text content
+ */
 const getTextContent = (element: React.ReactNode): string => {
   if (typeof element === 'string') {
     return element
@@ -23,79 +28,98 @@ const getTextContent = (element: React.ReactNode): string => {
   return ''
 }
 
-// Fix for code block text rendering issues
-if (typeof document !== 'undefined') {
-  const styleId = 'copilot-markdown-fix'
-  if (!document.getElementById(styleId)) {
-    const style = document.createElement('style')
-    style.id = styleId
-    style.textContent = `
-      .copilot-markdown-wrapper pre {
-        color: #e5e7eb !important;
-        font-weight: 400 !important;
-        text-shadow: none !important;
-        filter: none !important;
-        opacity: 1 !important;
-        -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
-        text-rendering: optimizeLegibility !important;
-        max-width: 100% !important;
-        overflow: auto !important;
-      }
-      
-      .dark .copilot-markdown-wrapper pre {
-        color: #f3f4f6 !important;
-      }
-      
-      .copilot-markdown-wrapper pre code,
-      .copilot-markdown-wrapper pre code *,
-      .copilot-markdown-wrapper pre span,
-      .copilot-markdown-wrapper pre div {
-        color: inherit !important;
-        opacity: 1 !important;
-        font-weight: 400 !important;
-        text-shadow: none !important;
-        filter: none !important;
-        -webkit-font-smoothing: antialiased !important;
-        -moz-osx-font-smoothing: grayscale !important;
-        text-rendering: optimizeLegibility !important;
-      }
-
-      /* Prevent any markdown content from expanding beyond the panel */
-      .copilot-markdown-wrapper, .copilot-markdown-wrapper * {
-        max-width: 100% !important;
-      }
-      .copilot-markdown-wrapper p, .copilot-markdown-wrapper li {
-        overflow-wrap: anywhere !important;
-        word-break: break-word !important;
-      }
-      .copilot-markdown-wrapper a {
-        overflow-wrap: anywhere !important;
-        word-break: break-all !important;
-      }
-      .copilot-markdown-wrapper code:not(pre code) {
-        white-space: normal !important;
-        overflow-wrap: anywhere !important;
-        word-break: break-word !important;
-      }
-
-      /* Reduce top margin for first heading (e.g., right after thinking block) */
-      .copilot-markdown-wrapper > h1:first-child,
-      .copilot-markdown-wrapper > h2:first-child,
-      .copilot-markdown-wrapper > h3:first-child,
-      .copilot-markdown-wrapper > h4:first-child {
-        margin-top: 0.25rem !important;
-      }
-    `
-    document.head.appendChild(style)
-  }
+/**
+ * Maps common language aliases to supported viewer languages
+ */
+const LANGUAGE_MAP: Record<string, 'javascript' | 'json' | 'python'> = {
+  js: 'javascript',
+  javascript: 'javascript',
+  jsx: 'javascript',
+  ts: 'javascript',
+  typescript: 'javascript',
+  tsx: 'javascript',
+  json: 'json',
+  python: 'python',
+  py: 'python',
+  code: 'javascript',
 }
 
-// Link component with preview
-function LinkWithPreview({ href, children }: { href: string; children: React.ReactNode }) {
+/**
+ * Normalizes a language string to a supported viewer language
+ */
+function normalizeLanguage(lang: string): 'javascript' | 'json' | 'python' {
+  const normalized = (lang || '').toLowerCase()
+  return LANGUAGE_MAP[normalized] || 'javascript'
+}
+
+/**
+ * Props for the CodeBlock component
+ */
+interface CodeBlockProps {
+  /** Code content to display */
+  code: string
+  /** Language identifier from markdown */
+  language: string
+}
+
+/**
+ * CodeBlock component with isolated copy state
+ * Prevents full markdown re-renders when copy button is clicked
+ */
+const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockProps) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(() => {
+    if (code) {
+      navigator.clipboard.writeText(code)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }, [code])
+
+  const viewerLanguage = normalizeLanguage(language)
+  const displayLanguage = language === 'code' ? viewerLanguage : language
+
   return (
-    <Tooltip delayDuration={300}>
-      <TooltipTrigger asChild>
+    <div className='mt-2.5 mb-2.5 w-0 min-w-full overflow-hidden rounded-md border border-[var(--border-1)] bg-[var(--surface-1)] text-sm'>
+      <div className='flex items-center justify-between border-[var(--border-1)] border-b px-3 py-1'>
+        <span className='font-season text-[var(--text-muted)] text-xs'>{displayLanguage}</span>
+        <button
+          onClick={handleCopy}
+          className='text-[var(--text-muted)] transition-colors hover:text-[var(--text-tertiary)]'
+          title='Copy'
+          type='button'
+        >
+          {copied ? (
+            <Check className='h-3 w-3' strokeWidth={2} />
+          ) : (
+            <Copy className='h-3 w-3' strokeWidth={2} />
+          )}
+        </button>
+      </div>
+      <Code.Viewer
+        code={code.replace(/\n+$/, '')}
+        showGutter
+        language={viewerLanguage}
+        className='m-0 min-h-0 rounded-none border-0 bg-transparent'
+      />
+    </div>
+  )
+})
+
+/**
+ * Link component with hover preview tooltip
+ */
+const LinkWithPreview = memo(function LinkWithPreview({
+  href,
+  children,
+}: {
+  href: string
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip.Root delayDuration={300}>
+      <Tooltip.Trigger asChild>
         <a
           href={href}
           className='inline break-all text-blue-600 hover:underline dark:text-blue-400'
@@ -104,286 +128,213 @@ function LinkWithPreview({ href, children }: { href: string; children: React.Rea
         >
           {children}
         </a>
-      </TooltipTrigger>
-      <TooltipContent side='top' align='center' sideOffset={5} className='max-w-sm p-3'>
+      </Tooltip.Trigger>
+      <Tooltip.Content side='top' align='center' sideOffset={5} className='max-w-sm'>
         <span className='text-sm'>{href}</span>
-      </TooltipContent>
-    </Tooltip>
+      </Tooltip.Content>
+    </Tooltip.Root>
   )
-}
+})
 
+/**
+ * Props for the CopilotMarkdownRenderer component
+ */
 interface CopilotMarkdownRendererProps {
+  /** Markdown content to render */
   content: string
 }
 
-export default function CopilotMarkdownRenderer({ content }: CopilotMarkdownRendererProps) {
-  const [copiedCodeBlocks, setCopiedCodeBlocks] = useState<Record<string, boolean>>({})
+/**
+ * Static markdown component definitions - optimized for LLM chat spacing
+ * Tighter spacing compared to traditional prose for better chat UX
+ */
+const markdownComponents = {
+  // Paragraphs - tight spacing, no margin on last
+  p: ({ children }: React.HTMLAttributes<HTMLParagraphElement>) => (
+    <p className='mb-1.5 font-base font-season text-[var(--text-primary)] text-sm leading-[1.4] last:mb-0 dark:font-[470]'>
+      {children}
+    </p>
+  ),
 
-  // Reset copy success state after 2 seconds
-  useEffect(() => {
-    const timers: Record<string, NodeJS.Timeout> = {}
+  // Headings - minimal margins for chat context
+  h1: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h1 className='mt-2 mb-1 font-season font-semibold text-[var(--text-primary)] text-base first:mt-0'>
+      {children}
+    </h1>
+  ),
+  h2: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h2 className='mt-2 mb-1 font-season font-semibold text-[15px] text-[var(--text-primary)] first:mt-0'>
+      {children}
+    </h2>
+  ),
+  h3: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h3 className='mt-1.5 mb-0.5 font-season font-semibold text-[var(--text-primary)] text-sm first:mt-0'>
+      {children}
+    </h3>
+  ),
+  h4: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h4 className='mt-1.5 mb-0.5 font-season font-semibold text-[var(--text-primary)] text-sm first:mt-0'>
+      {children}
+    </h4>
+  ),
 
-    Object.keys(copiedCodeBlocks).forEach((key) => {
-      if (copiedCodeBlocks[key]) {
-        timers[key] = setTimeout(() => {
-          setCopiedCodeBlocks((prev) => ({ ...prev, [key]: false }))
-        }, 2000)
-      }
-    })
+  // Lists - compact spacing
+  ul: ({ children }: React.HTMLAttributes<HTMLUListElement>) => (
+    <ul
+      className='my-1 space-y-0.5 pl-5 font-base font-season text-[var(--text-primary)] dark:font-[470]'
+      style={{ listStyleType: 'disc' }}
+    >
+      {children}
+    </ul>
+  ),
+  ol: ({ children }: React.HTMLAttributes<HTMLOListElement>) => (
+    <ol
+      className='my-1 space-y-0.5 pl-5 font-base font-season text-[var(--text-primary)] dark:font-[470]'
+      style={{ listStyleType: 'decimal' }}
+    >
+      {children}
+    </ol>
+  ),
+  li: ({ children }: React.LiHTMLAttributes<HTMLLIElement>) => (
+    <li
+      className='font-base font-season text-[var(--text-primary)] text-sm leading-[1.4] dark:font-[470]'
+      style={{ display: 'list-item' }}
+    >
+      {children}
+    </li>
+  ),
 
-    return () => {
-      Object.values(timers).forEach(clearTimeout)
+  // Code blocks - handled by CodeBlock component
+  pre: ({ children }: React.HTMLAttributes<HTMLPreElement>) => {
+    let codeContent: React.ReactNode = children
+    let language = 'code'
+
+    if (
+      React.isValidElement<{ className?: string; children?: React.ReactNode }>(children) &&
+      children.type === 'code'
+    ) {
+      const childElement = children as React.ReactElement<{
+        className?: string
+        children?: React.ReactNode
+      }>
+      codeContent = childElement.props.children
+      language = childElement.props.className?.replace('language-', '') || 'code'
     }
-  }, [copiedCodeBlocks])
 
-  // Custom components for react-markdown with current styling - memoized to prevent re-renders
-  const markdownComponents = useMemo(
-    () => ({
-      // Paragraph
-      p: ({ children }: React.HTMLAttributes<HTMLParagraphElement>) => (
-        <p className='mb-1 font-geist-sans text-base text-gray-800 leading-relaxed last:mb-0 dark:text-gray-200'>
-          {children}
-        </p>
-      ),
-
-      // Headings
-      h1: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
-        <h1 className='mt-3 mb-3 font-geist-sans font-semibold text-2xl text-gray-900 dark:text-gray-100'>
-          {children}
-        </h1>
-      ),
-      h2: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
-        <h2 className='mt-2.5 mb-2.5 font-geist-sans font-semibold text-gray-900 text-xl dark:text-gray-100'>
-          {children}
-        </h2>
-      ),
-      h3: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
-        <h3 className='mt-2 mb-2 font-geist-sans font-semibold text-gray-900 text-lg dark:text-gray-100'>
-          {children}
-        </h3>
-      ),
-      h4: ({ children }: React.HTMLAttributes<HTMLHeadingElement>) => (
-        <h4 className='mt-5 mb-2 font-geist-sans font-semibold text-base text-gray-900 dark:text-gray-100'>
-          {children}
-        </h4>
-      ),
-
-      // Lists
-      ul: ({ children }: React.HTMLAttributes<HTMLUListElement>) => (
-        <ul
-          className='mt-1 mb-1 space-y-1 pl-6 font-geist-sans text-gray-800 dark:text-gray-200'
-          style={{ listStyleType: 'disc' }}
-        >
-          {children}
-        </ul>
-      ),
-      ol: ({ children }: React.HTMLAttributes<HTMLOListElement>) => (
-        <ol
-          className='mt-1 mb-1 space-y-1 pl-6 font-geist-sans text-gray-800 dark:text-gray-200'
-          style={{ listStyleType: 'decimal' }}
-        >
-          {children}
-        </ol>
-      ),
-      li: ({
-        children,
-        ordered,
-      }: React.LiHTMLAttributes<HTMLLIElement> & { ordered?: boolean }) => (
-        <li
-          className='font-geist-sans text-gray-800 dark:text-gray-200'
-          style={{ display: 'list-item' }}
-        >
-          {children}
-        </li>
-      ),
-
-      // Code blocks
-      pre: ({ children }: React.HTMLAttributes<HTMLPreElement>) => {
-        let codeContent: React.ReactNode = children
-        let language = 'code'
-
-        if (
-          React.isValidElement<{ className?: string; children?: React.ReactNode }>(children) &&
-          children.type === 'code'
-        ) {
-          const childElement = children as React.ReactElement<{
-            className?: string
-            children?: React.ReactNode
-          }>
-          codeContent = childElement.props.children
-          language = childElement.props.className?.replace('language-', '') || 'code'
-        }
-
-        // Extract actual text content
-        let actualCodeText = ''
-        if (typeof codeContent === 'string') {
-          actualCodeText = codeContent
-        } else if (React.isValidElement(codeContent)) {
-          // If it's a React element, try to get its text content
-          actualCodeText = getTextContent(codeContent)
-        } else if (Array.isArray(codeContent)) {
-          // If it's an array of elements, join their text content
-          actualCodeText = codeContent
-            .map((child) =>
-              typeof child === 'string'
-                ? child
-                : React.isValidElement(child)
-                  ? getTextContent(child)
-                  : ''
-            )
-            .join('')
-        } else {
-          actualCodeText = String(codeContent || '')
-        }
-
-        // Create a unique key for this code block based on content
-        const codeText = actualCodeText || 'code'
-        const codeBlockKey = `${language}-${codeText.substring(0, 30).replace(/\s/g, '-')}-${codeText.length}`
-
-        const showCopySuccess = copiedCodeBlocks[codeBlockKey] || false
-
-        const handleCopy = () => {
-          const textToCopy = actualCodeText
-          if (textToCopy) {
-            navigator.clipboard.writeText(textToCopy)
-            setCopiedCodeBlocks((prev) => ({ ...prev, [codeBlockKey]: true }))
-          }
-        }
-
-        return (
-          <div className='my-6 w-0 min-w-full rounded-md bg-gray-900 text-sm dark:bg-black'>
-            <div className='flex items-center justify-between border-gray-700 border-b px-4 py-1.5 dark:border-gray-800'>
-              <span className='font-geist-sans text-gray-400 text-xs'>{language}</span>
-              <button
-                onClick={handleCopy}
-                className='text-muted-foreground transition-colors hover:text-gray-300'
-                title='Copy'
-              >
-                {showCopySuccess ? (
-                  <Check className='h-3 w-3' strokeWidth={2} />
-                ) : (
-                  <Copy className='h-3 w-3' strokeWidth={2} />
-                )}
-              </button>
-            </div>
-            <div className='overflow-x-auto'>
-              <pre className='whitespace-pre p-4 font-mono text-gray-100 text-sm leading-relaxed'>
-                {actualCodeText}
-              </pre>
-            </div>
-          </div>
+    let actualCodeText = ''
+    if (typeof codeContent === 'string') {
+      actualCodeText = codeContent
+    } else if (React.isValidElement(codeContent)) {
+      actualCodeText = getTextContent(codeContent)
+    } else if (Array.isArray(codeContent)) {
+      actualCodeText = codeContent
+        .map((child) =>
+          typeof child === 'string'
+            ? child
+            : React.isValidElement(child)
+              ? getTextContent(child)
+              : ''
         )
-      },
+        .join('')
+    } else {
+      actualCodeText = String(codeContent || '')
+    }
 
-      // Inline code
-      code: ({
-        inline,
-        className,
-        children,
-        ...props
-      }: React.HTMLAttributes<HTMLElement> & { className?: string; inline?: boolean }) => {
-        if (inline) {
-          return (
-            <code
-              className='whitespace-normal break-all rounded bg-gray-200 px-1 py-0.5 font-mono text-[0.9em] text-gray-800 dark:bg-gray-700 dark:text-gray-200'
-              {...props}
-            >
-              {children}
-            </code>
-          )
-        }
-        return (
-          <code className={className} {...props}>
-            {children}
-          </code>
-        )
-      },
+    return <CodeBlock code={actualCodeText} language={language} />
+  },
 
-      // Bold text
-      strong: ({ children }: React.HTMLAttributes<HTMLElement>) => (
-        <strong className='font-semibold text-gray-900 dark:text-gray-100'>{children}</strong>
-      ),
+  // Inline code
+  code: ({
+    className,
+    children,
+    ...props
+  }: React.HTMLAttributes<HTMLElement> & { className?: string }) => (
+    <code
+      className='whitespace-normal break-all rounded border border-[var(--border-1)] bg-[var(--surface-1)] px-1 py-0.5 font-mono text-[0.85em] text-[var(--text-primary)]'
+      {...props}
+    >
+      {children}
+    </code>
+  ),
 
-      // Bold text (alternative)
-      b: ({ children }: React.HTMLAttributes<HTMLElement>) => (
-        <b className='font-semibold text-gray-900 dark:text-gray-100'>{children}</b>
-      ),
+  // Text formatting
+  strong: ({ children }: React.HTMLAttributes<HTMLElement>) => (
+    <strong className='font-semibold text-[var(--text-primary)]'>{children}</strong>
+  ),
+  b: ({ children }: React.HTMLAttributes<HTMLElement>) => (
+    <b className='font-semibold text-[var(--text-primary)]'>{children}</b>
+  ),
+  em: ({ children }: React.HTMLAttributes<HTMLElement>) => (
+    <em className='text-[var(--text-primary)] italic'>{children}</em>
+  ),
+  i: ({ children }: React.HTMLAttributes<HTMLElement>) => (
+    <i className='text-[var(--text-primary)] italic'>{children}</i>
+  ),
 
-      // Italic text
-      em: ({ children }: React.HTMLAttributes<HTMLElement>) => (
-        <em className='text-gray-800 italic dark:text-gray-200'>{children}</em>
-      ),
+  // Blockquote - compact
+  blockquote: ({ children }: React.HTMLAttributes<HTMLQuoteElement>) => (
+    <blockquote className='my-1.5 border-[var(--border-1)] border-l-2 py-0.5 pl-3 font-season text-[var(--text-secondary)] text-sm italic'>
+      {children}
+    </blockquote>
+  ),
 
-      // Italic text (alternative)
-      i: ({ children }: React.HTMLAttributes<HTMLElement>) => (
-        <i className='text-gray-800 italic dark:text-gray-200'>{children}</i>
-      ),
+  // Horizontal rule
+  hr: () => <hr className='my-3 border-[var(--divider)] border-t' />,
 
-      // Blockquotes
-      blockquote: ({ children }: React.HTMLAttributes<HTMLQuoteElement>) => (
-        <blockquote className='my-4 border-gray-300 border-l-4 py-1 pl-4 font-geist-sans text-gray-700 italic dark:border-gray-600 dark:text-gray-300'>
-          {children}
-        </blockquote>
-      ),
+  // Links
+  a: ({ href, children }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <LinkWithPreview href={href || '#'}>{children}</LinkWithPreview>
+  ),
 
-      // Horizontal rule
-      hr: () => <hr className='my-8 border-gray-500/[.07] border-t dark:border-gray-400/[.07]' />,
+  // Tables - compact
+  table: ({ children }: React.TableHTMLAttributes<HTMLTableElement>) => (
+    <div className='my-2 max-w-full overflow-x-auto'>
+      <table className='min-w-full table-auto border border-[var(--border-1)] font-season text-xs'>
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }: React.HTMLAttributes<HTMLTableSectionElement>) => (
+    <thead className='bg-[var(--surface-5)] text-left dark:bg-[var(--surface-4)]'>{children}</thead>
+  ),
+  tbody: ({ children }: React.HTMLAttributes<HTMLTableSectionElement>) => (
+    <tbody className='divide-y divide-[var(--border-1)]'>{children}</tbody>
+  ),
+  tr: ({ children }: React.HTMLAttributes<HTMLTableRowElement>) => (
+    <tr className='border-[var(--border-1)] border-b'>{children}</tr>
+  ),
+  th: ({ children }: React.ThHTMLAttributes<HTMLTableCellElement>) => (
+    <th className='border-[var(--border-1)] border-r px-2 py-1 align-top font-base text-[var(--text-secondary)] last:border-r-0 dark:font-[470]'>
+      {children}
+    </th>
+  ),
+  td: ({ children }: React.TdHTMLAttributes<HTMLTableCellElement>) => (
+    <td className='break-words border-[var(--border-1)] border-r px-2 py-1 align-top font-base text-[var(--text-primary)] last:border-r-0 dark:font-[470]'>
+      {children}
+    </td>
+  ),
 
-      // Links
-      a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-        <LinkWithPreview href={href || '#'} {...props}>
-          {children}
-        </LinkWithPreview>
-      ),
+  // Images
+  img: ({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
+    <img src={src} alt={alt || 'Image'} className='my-2 h-auto max-w-full rounded-md' {...props} />
+  ),
+}
 
-      // Tables
-      table: ({ children }: React.TableHTMLAttributes<HTMLTableElement>) => (
-        <div className='my-4 max-w-full overflow-x-auto'>
-          <table className='min-w-full table-auto border border-gray-300 font-geist-sans text-sm dark:border-gray-700'>
-            {children}
-          </table>
-        </div>
-      ),
-      thead: ({ children }: React.HTMLAttributes<HTMLTableSectionElement>) => (
-        <thead className='bg-gray-100 text-left dark:bg-gray-800'>{children}</thead>
-      ),
-      tbody: ({ children }: React.HTMLAttributes<HTMLTableSectionElement>) => (
-        <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>{children}</tbody>
-      ),
-      tr: ({ children }: React.HTMLAttributes<HTMLTableRowElement>) => (
-        <tr className='border-gray-200 border-b transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800/60'>
-          {children}
-        </tr>
-      ),
-      th: ({ children }: React.ThHTMLAttributes<HTMLTableCellElement>) => (
-        <th className='border-gray-300 border-r px-4 py-2 font-medium text-gray-700 last:border-r-0 dark:border-gray-700 dark:text-gray-300'>
-          {children}
-        </th>
-      ),
-      td: ({ children }: React.TdHTMLAttributes<HTMLTableCellElement>) => (
-        <td className='break-words border-gray-300 border-r px-4 py-2 text-gray-800 last:border-r-0 dark:border-gray-700 dark:text-gray-200'>
-          {children}
-        </td>
-      ),
-
-      // Images
-      img: ({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
-        <img
-          src={src}
-          alt={alt || 'Image'}
-          className='my-3 h-auto max-w-full rounded-md'
-          {...props}
-        />
-      ),
-    }),
-    [copiedCodeBlocks]
-  )
-
+/**
+ * CopilotMarkdownRenderer renders markdown content with custom styling
+ * Optimized for LLM chat: tight spacing, memoized components, isolated state
+ *
+ * @param props - Component props
+ * @returns Rendered markdown content
+ */
+function CopilotMarkdownRenderer({ content }: CopilotMarkdownRendererProps) {
   return (
-    <div className='copilot-markdown-wrapper max-w-full space-y-4 break-words font-geist-sans text-[#0D0D0D] text-base leading-relaxed dark:text-gray-100'>
+    <div className='max-w-full break-words font-base font-season text-[var(--text-primary)] text-sm leading-[1.4] dark:font-[470] [&_*]:max-w-full [&_a]:break-all [&_code:not(pre_code)]:break-words [&_li]:break-words [&_p]:break-words'>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {content}
       </ReactMarkdown>
     </div>
   )
 }
+
+export default memo(CopilotMarkdownRenderer)

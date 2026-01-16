@@ -1,38 +1,18 @@
 import type { BlockState, Position } from '@/stores/workflows/workflow/types'
 
+export type { Edge } from 'reactflow'
+export type { Loop, Parallel } from '@/stores/workflows/workflow/types'
+
 export interface LayoutOptions {
   horizontalSpacing?: number
   verticalSpacing?: number
   padding?: { x: number; y: number }
-  alignment?: 'start' | 'center' | 'end'
 }
 
 export interface LayoutResult {
   blocks: Record<string, BlockState>
   success: boolean
   error?: string
-}
-
-export interface Edge {
-  id: string
-  source: string
-  target: string
-  sourceHandle?: string | null
-  targetHandle?: string | null
-}
-
-export interface Loop {
-  id: string
-  nodes: string[]
-  iterations: number
-  loopType: 'for' | 'forEach'
-}
-
-export interface Parallel {
-  id: string
-  nodes: string[]
-  count?: number
-  parallelType?: 'count' | 'collection'
 }
 
 export interface BlockMetrics {

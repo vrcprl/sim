@@ -1,18 +1,18 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { createLogger } from '@sim/logger'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { client } from '@/lib/auth-client'
-import { quickValidateEmail } from '@/lib/email/validation'
-import { env, isFalsy } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
-import { inter } from '@/app/fonts/inter'
-import { soehne } from '@/app/fonts/soehne/soehne'
+import { client } from '@/lib/auth/auth-client'
+import { env, isFalsy } from '@/lib/core/config/env'
+import { cn } from '@/lib/core/utils/cn'
+import { quickValidateEmail } from '@/lib/messaging/email/validation'
+import { inter } from '@/app/_styles/fonts/inter/inter'
+import { soehne } from '@/app/_styles/fonts/soehne/soehne'
 
 const logger = createLogger('SSOForm')
 
@@ -57,7 +57,7 @@ export default function SSOForm() {
   const [email, setEmail] = useState('')
   const [emailErrors, setEmailErrors] = useState<string[]>([])
   const [showEmailValidationError, setShowEmailValidationError] = useState(false)
-  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
+  const [buttonClass, setButtonClass] = useState('branded-button-gradient')
   const [callbackUrl, setCallbackUrl] = useState('/workspace')
 
   useEffect(() => {
@@ -69,6 +69,12 @@ export default function SSOForm() {
         } else {
           logger.warn('Invalid callback URL detected and blocked:', { url: callback })
         }
+      }
+
+      // Pre-fill email if provided in URL (e.g., from deployed chat SSO)
+      const emailParam = searchParams.get('email')
+      if (emailParam) {
+        setEmail(emailParam)
       }
 
       // Check for SSO error from redirect
@@ -90,9 +96,9 @@ export default function SSOForm() {
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
       if (brandAccent && brandAccent !== '#6f3dfa') {
-        setButtonClass('auth-button-custom')
+        setButtonClass('branded-button-custom')
       } else {
-        setButtonClass('auth-button-gradient')
+        setButtonClass('branded-button-gradient')
       }
     }
 

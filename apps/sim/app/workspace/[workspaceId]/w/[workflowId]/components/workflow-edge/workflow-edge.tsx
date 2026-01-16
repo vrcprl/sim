@@ -1,6 +1,9 @@
+import { memo, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { BaseEdge, EdgeLabelRenderer, type EdgeProps, getSmoothStepPath } from 'reactflow'
+import { useShallow } from 'zustand/react/shallow'
 import type { EdgeDiffStatus } from '@/lib/workflows/diff/types'
+import { useExecutionStore } from '@/stores/execution'
 import { useWorkflowDiffStore } from '@/stores/workflow-diff'
 
 interface WorkflowEdgeProps extends EdgeProps {
@@ -8,7 +11,7 @@ interface WorkflowEdgeProps extends EdgeProps {
   targetHandle?: string | null
 }
 
-export const WorkflowEdge = ({
+const WorkflowEdgeComponent = ({
   id,
   sourceX,
   sourceY,
@@ -37,85 +40,96 @@ export const WorkflowEdge = ({
   })
 
   const isSelected = data?.isSelected ?? false
-  const isInsideLoop = data?.isInsideLoop ?? false
-  const parentLoopId = data?.parentLoopId
 
-  const diffAnalysis = useWorkflowDiffStore((state) => state.diffAnalysis)
-  const isShowingDiff = useWorkflowDiffStore((state) => state.isShowingDiff)
-  const isDiffReady = useWorkflowDiffStore((state) => state.isDiffReady)
+  const { diffAnalysis, isShowingDiff, isDiffReady } = useWorkflowDiffStore(
+    useShallow((state) => ({
+      diffAnalysis: state.diffAnalysis,
+      isShowingDiff: state.isShowingDiff,
+      isDiffReady: state.isDiffReady,
+    }))
+  )
+  const lastRunEdges = useExecutionStore((state) => state.lastRunEdges)
 
-  const generateEdgeIdentity = (
-    sourceId: string,
-    targetId: string,
-    sourceHandle?: string | null,
-    targetHandle?: string | null
-  ): string => {
+  const dataSourceHandle = (data as { sourceHandle?: string } | undefined)?.sourceHandle
+  const isErrorEdge = (sourceHandle ?? dataSourceHandle) === 'error'
+  const previewExecutionStatus = (
+    data as { executionStatus?: 'success' | 'error' | 'not-executed' } | undefined
+  )?.executionStatus
+  const edgeRunStatus = previewExecutionStatus || lastRunEdges.get(id)
+
+  const edgeDiffStatus = useMemo((): EdgeDiffStatus => {
+    if (data?.isDeleted) return 'deleted'
+    if (!diffAnalysis?.edge_diff || !isDiffReady) return null
+
     const actualSourceHandle = sourceHandle || 'source'
     const actualTargetHandle = targetHandle || 'target'
-    return `${sourceId}-${actualSourceHandle}-${targetId}-${actualTargetHandle}`
-  }
+    const edgeIdentifier = `${source}-${actualSourceHandle}-${target}-${actualTargetHandle}`
 
-  const edgeIdentifier = generateEdgeIdentity(source, target, sourceHandle, targetHandle)
-
-  let edgeDiffStatus: EdgeDiffStatus = null
-
-  if (data?.isDeleted) {
-    edgeDiffStatus = 'deleted'
-  } else if (diffAnalysis?.edge_diff && edgeIdentifier && isDiffReady) {
     if (isShowingDiff) {
-      if (diffAnalysis.edge_diff.new_edges.includes(edgeIdentifier)) {
-        edgeDiffStatus = 'new'
-      } else if (diffAnalysis.edge_diff.unchanged_edges.includes(edgeIdentifier)) {
-        edgeDiffStatus = 'unchanged'
-      }
+      if (diffAnalysis.edge_diff.new_edges.includes(edgeIdentifier)) return 'new'
+      if (diffAnalysis.edge_diff.unchanged_edges.includes(edgeIdentifier)) return 'unchanged'
     } else {
-      if (diffAnalysis.edge_diff.deleted_edges.includes(edgeIdentifier)) {
-        edgeDiffStatus = 'deleted'
-      }
+      if (diffAnalysis.edge_diff.deleted_edges.includes(edgeIdentifier)) return 'deleted'
     }
-  }
+    return null
+  }, [
+    data?.isDeleted,
+    diffAnalysis,
+    isDiffReady,
+    isShowingDiff,
+    source,
+    target,
+    sourceHandle,
+    targetHandle,
+  ])
 
-  const getEdgeColor = () => {
-    if (edgeDiffStatus === 'new') return '#22c55e' // Green for new edges
-    if (edgeDiffStatus === 'deleted') return '#ef4444' // Red for deleted edges
-    if (isSelected) return '#475569'
-    return '#94a3b8'
-  }
+  const edgeStyle = useMemo(() => {
+    let color = 'var(--workflow-edge)'
+    let opacity = 1
 
-  const edgeStyle = {
-    strokeWidth: edgeDiffStatus ? 3 : isSelected ? 2.5 : 2,
-    stroke: getEdgeColor(),
-    strokeDasharray: edgeDiffStatus === 'deleted' ? '10,5' : '5,5', // Longer dashes for deleted
-    opacity: edgeDiffStatus === 'deleted' ? 0.7 : 1,
-    ...style,
-  }
+    if (edgeDiffStatus === 'deleted') {
+      color = 'var(--text-error)'
+      opacity = 0.7
+    } else if (isErrorEdge) {
+      color = 'var(--text-error)'
+    } else if (edgeDiffStatus === 'new') {
+      color = 'var(--brand-tertiary-2)'
+    } else if (edgeRunStatus === 'success') {
+      // Use green for preview mode, default for canvas execution
+      color = previewExecutionStatus ? 'var(--brand-tertiary-2)' : 'var(--border-success)'
+    } else if (edgeRunStatus === 'error') {
+      color = 'var(--text-error)'
+    }
+
+    if (isSelected) {
+      opacity = 0.5
+    }
+
+    return {
+      ...(style ?? {}),
+      strokeWidth: edgeDiffStatus
+        ? 3
+        : edgeRunStatus === 'success' || edgeRunStatus === 'error'
+          ? 2.5
+          : isSelected
+            ? 2.5
+            : 2,
+      stroke: color,
+      strokeDasharray: edgeDiffStatus === 'deleted' ? '10,5' : undefined,
+      opacity,
+    }
+  }, [style, edgeDiffStatus, isSelected, isErrorEdge, edgeRunStatus, previewExecutionStatus])
 
   return (
     <>
-      <BaseEdge
-        path={edgePath}
-        data-testid='workflow-edge'
-        style={edgeStyle}
-        interactionWidth={30}
-        data-edge-id={id}
-        data-parent-loop-id={parentLoopId}
-        data-is-selected={isSelected ? 'true' : 'false'}
-        data-is-inside-loop={isInsideLoop ? 'true' : 'false'}
-      />
-      {/* Animate dash offset for edge movement effect */}
-      <animate
-        attributeName='stroke-dashoffset'
-        from={edgeDiffStatus === 'deleted' ? '15' : '10'}
-        to='0'
-        dur={edgeDiffStatus === 'deleted' ? '2s' : '1s'}
-        repeatCount='indefinite'
-      />
+      <BaseEdge path={edgePath} style={edgeStyle} interactionWidth={30} />
 
       {isSelected && (
         <EdgeLabelRenderer>
           <div
-            className='nodrag nopan flex h-6 w-6 cursor-pointer items-center justify-center rounded-full bg-[#FAFBFC] shadow-sm'
+            className='nodrag nopan group flex h-[22px] w-[22px] cursor-pointer items-center justify-center transition-colors'
             style={{
+              position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               pointerEvents: 'all',
               zIndex: 100,
@@ -125,15 +139,16 @@ export const WorkflowEdge = ({
               e.stopPropagation()
 
               if (data?.onDelete) {
-                // Pass this specific edge's ID to the delete function
                 data.onDelete(id)
               }
             }}
           >
-            <X className='h-5 w-5 text-red-500 hover:text-red-600' />
+            <X className='h-4 w-4 text-[var(--text-error)] transition-colors group-hover:text-[var(--text-error)]/80' />
           </div>
         </EdgeLabelRenderer>
       )}
     </>
   )
 }
+
+export const WorkflowEdge = memo(WorkflowEdgeComponent)

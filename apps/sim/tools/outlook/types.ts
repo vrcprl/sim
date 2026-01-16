@@ -5,11 +5,13 @@ export interface OutlookSendParams {
   to: string
   subject: string
   body: string
+  contentType?: 'text' | 'html'
   // Thread support parameters
   replyToMessageId?: string
   conversationId?: string
   cc?: string
   bcc?: string
+  attachments?: any[]
 }
 
 export interface OutlookSendResponse extends ToolResponse {
@@ -41,6 +43,8 @@ export interface OutlookDraftParams {
   bcc?: string
   subject: string
   body: string
+  contentType?: 'text' | 'html'
+  attachments?: any[]
 }
 
 export interface OutlookDraftResponse extends ToolResponse {
@@ -161,4 +165,73 @@ export interface OutlookForwardResponse extends ToolResponse {
   }
 }
 
-export type OutlookExtendedResponse = OutlookResponse | OutlookForwardResponse
+export interface OutlookMoveParams {
+  accessToken: string
+  messageId: string
+  destinationId: string
+}
+
+export interface OutlookMoveResponse extends ToolResponse {
+  output: {
+    message: string
+    results: {
+      messageId: string
+      newFolderId: string
+    }
+  }
+}
+
+export interface OutlookMarkReadParams {
+  accessToken: string
+  messageId: string
+}
+
+export interface OutlookMarkReadResponse extends ToolResponse {
+  output: {
+    message: string
+    results: {
+      messageId: string
+      isRead: boolean
+    }
+  }
+}
+
+export interface OutlookDeleteParams {
+  accessToken: string
+  messageId: string
+}
+
+export interface OutlookDeleteResponse extends ToolResponse {
+  output: {
+    message: string
+    results: {
+      messageId: string
+      status: string
+    }
+  }
+}
+
+export interface OutlookCopyParams {
+  accessToken: string
+  messageId: string
+  destinationId: string
+}
+
+export interface OutlookCopyResponse extends ToolResponse {
+  output: {
+    message: string
+    results: {
+      originalMessageId: string
+      copiedMessageId: string
+      destinationFolderId: string
+    }
+  }
+}
+
+export type OutlookExtendedResponse =
+  | OutlookResponse
+  | OutlookForwardResponse
+  | OutlookMoveResponse
+  | OutlookMarkReadResponse
+  | OutlookDeleteResponse
+  | OutlookCopyResponse

@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { LatestCommitParams, LatestCommitResponse } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -132,5 +132,36 @@ export const latestCommitTool: ToolConfig<LatestCommitParams, LatestCommitRespon
       type: 'object',
       description: 'Commit metadata',
     },
+  },
+}
+
+export const latestCommitV2Tool: ToolConfig = {
+  id: 'github_latest_commit_v2',
+  name: latestCommitTool.name,
+  description: latestCommitTool.description,
+  version: '2.0.0',
+  params: latestCommitTool.params,
+  request: latestCommitTool.request,
+  oauth: latestCommitTool.oauth,
+  transformResponse: async (response: Response) => {
+    const commits = await response.json()
+    const commit = commits[0]
+    return {
+      success: true,
+      output: {
+        sha: commit.sha,
+        html_url: commit.html_url,
+        commit: commit.commit,
+        author: commit.author ?? null,
+        committer: commit.committer ?? null,
+      },
+    }
+  },
+  outputs: {
+    sha: { type: 'string', description: 'Commit SHA' },
+    html_url: { type: 'string', description: 'GitHub web URL' },
+    commit: { type: 'json', description: 'Commit info with message, author, committer' },
+    author: { type: 'json', description: 'Author user object', optional: true },
+    committer: { type: 'json', description: 'Committer user object', optional: true },
   },
 }

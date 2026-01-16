@@ -1,10 +1,10 @@
-import { db, workflowDeploymentVersion } from '@sim/db'
+import { db, workflow, workflowDeploymentVersion } from '@sim/db'
+import { createLogger } from '@sim/logger'
 import { and, desc, eq } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/db-helpers'
-import { hasWorkflowChanged } from '@/lib/workflows/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { hasWorkflowChanged } from '@/lib/workflows/comparison'
+import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/persistence/utils'
 import { validateWorkflowAccess } from '@/app/api/workflows/middleware'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -22,23 +22,32 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return createErrorResponse(validation.error.message, validation.error.status)
     }
 
-    // Check if the workflow has meaningful changes that would require redeployment
     let needsRedeployment = false
 
     if (validation.workflow.isDeployed) {
-      // Get current state from normalized tables (same logic as deployment API)
-      // Load current state from normalized tables using centralized helper
       const normalizedData = await loadWorkflowFromNormalizedTables(id)
 
       if (!normalizedData) {
-        return createErrorResponse('Failed to load workflow state', 500)
+        return createSuccessResponse({
+          isDeployed: validation.workflow.isDeployed,
+          deployedAt: validation.workflow.deployedAt,
+          isPublished: validation.workflow.isPublished,
+          needsRedeployment: false,
+        })
       }
+
+      const [workflowRecord] = await db
+        .select({ variables: workflow.variables })
+        .from(workflow)
+        .where(eq(workflow.id, id))
+        .limit(1)
 
       const currentState = {
         blocks: normalizedData.blocks,
         edges: normalizedData.edges,
         loops: normalizedData.loops,
         parallels: normalizedData.parallels,
+        variables: workflowRecord?.variables || {},
         lastSaved: Date.now(),
       }
 

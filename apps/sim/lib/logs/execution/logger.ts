@@ -1,19 +1,26 @@
 import { db } from '@sim/db'
 import {
   member,
-  organization,
   userStats,
   user as userTable,
   workflow,
   workflowExecutionLogs,
 } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq, sql } from 'drizzle-orm'
 import { v4 as uuidv4 } from 'uuid'
+import { BASE_EXECUTION_CHARGE } from '@/lib/billing/constants'
 import { getHighestPrioritySubscription } from '@/lib/billing/core/subscription'
-import { checkUsageStatus, maybeSendUsageThresholdEmail } from '@/lib/billing/core/usage'
+import {
+  checkUsageStatus,
+  getOrgUsageLimit,
+  maybeSendUsageThresholdEmail,
+} from '@/lib/billing/core/usage'
+import { logWorkflowUsageBatch } from '@/lib/billing/core/usage-log'
 import { checkAndBillOverageThreshold } from '@/lib/billing/threshold-billing'
-import { isBillingEnabled } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
+import { isBillingEnabled } from '@/lib/core/config/feature-flags'
+import { redactApiKeys } from '@/lib/core/security/redaction'
+import { filterForDisplay } from '@/lib/core/utils/display-filters'
 import { emitWorkflowExecutionCompleted } from '@/lib/logs/events'
 import { snapshotService } from '@/lib/logs/execution/snapshot/service'
 import type {
@@ -43,17 +50,60 @@ const logger = createLogger('ExecutionLogger')
 export class ExecutionLogger implements IExecutionLoggerService {
   async startWorkflowExecution(params: {
     workflowId: string
+    workspaceId: string
     executionId: string
     trigger: ExecutionTrigger
     environment: ExecutionEnvironment
     workflowState: WorkflowState
+    deploymentVersionId?: string
   }): Promise<{
     workflowLog: WorkflowExecutionLog
     snapshot: WorkflowExecutionSnapshot
   }> {
-    const { workflowId, executionId, trigger, environment, workflowState } = params
+    const {
+      workflowId,
+      workspaceId,
+      executionId,
+      trigger,
+      environment,
+      workflowState,
+      deploymentVersionId,
+    } = params
 
     logger.debug(`Starting workflow execution ${executionId} for workflow ${workflowId}`)
+
+    // Check if execution log already exists (idempotency check)
+    const existingLog = await db
+      .select()
+      .from(workflowExecutionLogs)
+      .where(eq(workflowExecutionLogs.executionId, executionId))
+      .limit(1)
+
+    if (existingLog.length > 0) {
+      logger.debug(
+        `Execution log already exists for ${executionId}, skipping duplicate INSERT (idempotent)`
+      )
+      const snapshot = await snapshotService.getSnapshot(existingLog[0].stateSnapshotId)
+      if (!snapshot) {
+        throw new Error(`Snapshot ${existingLog[0].stateSnapshotId} not found for existing log`)
+      }
+      return {
+        workflowLog: {
+          id: existingLog[0].id,
+          workflowId: existingLog[0].workflowId,
+          executionId: existingLog[0].executionId,
+          stateSnapshotId: existingLog[0].stateSnapshotId,
+          level: existingLog[0].level as 'info' | 'error',
+          trigger: existingLog[0].trigger as ExecutionTrigger['type'],
+          startedAt: existingLog[0].startedAt.toISOString(),
+          endedAt: existingLog[0].endedAt?.toISOString() || existingLog[0].startedAt.toISOString(),
+          totalDurationMs: existingLog[0].totalDurationMs || 0,
+          executionData: existingLog[0].executionData as WorkflowExecutionLog['executionData'],
+          createdAt: existingLog[0].createdAt.toISOString(),
+        },
+        snapshot,
+      }
+    }
 
     const snapshotResult = await snapshotService.createSnapshotWithDeduplication(
       workflowId,
@@ -67,9 +117,12 @@ export class ExecutionLogger implements IExecutionLoggerService {
       .values({
         id: uuidv4(),
         workflowId,
+        workspaceId,
         executionId,
         stateSnapshotId: snapshotResult.snapshot.id,
+        deploymentVersionId: deploymentVersionId ?? null,
         level: 'info',
+        status: 'running',
         trigger: trigger.type,
         startedAt: startTime,
         endedAt: null,
@@ -77,6 +130,13 @@ export class ExecutionLogger implements IExecutionLoggerService {
         executionData: {
           environment,
           trigger,
+        },
+        cost: {
+          total: BASE_EXECUTION_CHARGE,
+          input: 0,
+          output: 0,
+          tokens: { input: 0, output: 0, total: 0 },
+          models: {},
         },
       })
       .returning()
@@ -120,13 +180,16 @@ export class ExecutionLogger implements IExecutionLoggerService {
           input: number
           output: number
           total: number
-          tokens: { prompt: number; completion: number; total: number }
+          tokens: { input: number; output: number; total: number }
         }
       >
     }
     finalOutput: BlockOutputData
     traceSpans?: TraceSpan[]
     workflowInput?: any
+    isResume?: boolean
+    level?: 'info' | 'error'
+    status?: 'completed' | 'failed' | 'cancelled' | 'pending'
   }): Promise<WorkflowExecutionLog> {
     const {
       executionId,
@@ -136,11 +199,26 @@ export class ExecutionLogger implements IExecutionLoggerService {
       finalOutput,
       traceSpans,
       workflowInput,
+      isResume,
+      level: levelOverride,
+      status: statusOverride,
     } = params
 
-    logger.debug(`Completing workflow execution ${executionId}`)
+    logger.debug(`Completing workflow execution ${executionId}`, { isResume })
+
+    // If this is a resume, fetch the existing log to merge data
+    let existingLog: any = null
+    if (isResume) {
+      const [existing] = await db
+        .select()
+        .from(workflowExecutionLogs)
+        .where(eq(workflowExecutionLogs.executionId, executionId))
+        .limit(1)
+      existingLog = existing
+    }
 
     // Determine if workflow failed by checking trace spans for errors
+    // Use the override if provided (for cost-only fallback scenarios)
     const hasErrors = traceSpans?.some((span: any) => {
       const checkSpanForErrors = (s: any): boolean => {
         if (s.status === 'error') return true
@@ -152,39 +230,60 @@ export class ExecutionLogger implements IExecutionLoggerService {
       return checkSpanForErrors(span)
     })
 
-    const level = hasErrors ? 'error' : 'info'
+    const level = levelOverride ?? (hasErrors ? 'error' : 'info')
+    const status = statusOverride ?? (hasErrors ? 'failed' : 'completed')
 
     // Extract files from trace spans, final output, and workflow input
     const executionFiles = this.extractFilesFromExecution(traceSpans, finalOutput, workflowInput)
+
+    // For resume executions, rebuild trace spans from the aggregated logs
+    const mergedTraceSpans = isResume
+      ? traceSpans && traceSpans.length > 0
+        ? traceSpans
+        : existingLog?.executionData?.traceSpans || []
+      : traceSpans
+
+    const filteredTraceSpans = filterForDisplay(mergedTraceSpans)
+    const filteredFinalOutput = filterForDisplay(finalOutput)
+    const redactedTraceSpans = redactApiKeys(filteredTraceSpans)
+    const redactedFinalOutput = redactApiKeys(filteredFinalOutput)
+
+    const executionCost = {
+      total: costSummary.totalCost,
+      input: costSummary.totalInputCost,
+      output: costSummary.totalOutputCost,
+      tokens: {
+        input: costSummary.totalPromptTokens,
+        output: costSummary.totalCompletionTokens,
+        total: costSummary.totalTokens,
+      },
+      models: costSummary.models,
+    }
+
+    const totalDuration =
+      isResume && existingLog?.startedAt
+        ? new Date(endedAt).getTime() - new Date(existingLog.startedAt).getTime()
+        : totalDurationMs
 
     const [updatedLog] = await db
       .update(workflowExecutionLogs)
       .set({
         level,
+        status,
         endedAt: new Date(endedAt),
-        totalDurationMs,
+        totalDurationMs: totalDuration,
         files: executionFiles.length > 0 ? executionFiles : null,
         executionData: {
-          traceSpans,
-          finalOutput,
-          tokenBreakdown: {
-            prompt: costSummary.totalPromptTokens,
-            completion: costSummary.totalCompletionTokens,
-            total: costSummary.totalTokens,
-          },
-          models: costSummary.models,
-        },
-        cost: {
-          total: costSummary.totalCost,
-          input: costSummary.totalInputCost,
-          output: costSummary.totalOutputCost,
+          traceSpans: redactedTraceSpans,
+          finalOutput: redactedFinalOutput,
           tokens: {
-            prompt: costSummary.totalPromptTokens,
-            completion: costSummary.totalCompletionTokens,
-            total: costSummary.totalTokens,
+            input: executionCost.tokens.input,
+            output: executionCost.tokens.output,
+            total: executionCost.tokens.total,
           },
-          models: costSummary.models,
+          models: executionCost.models,
         },
+        cost: executionCost,
       })
       .where(eq(workflowExecutionLogs.executionId, executionId))
       .returning()
@@ -217,7 +316,8 @@ export class ExecutionLogger implements IExecutionLoggerService {
             await this.updateUserStats(
               updatedLog.workflowId,
               costSummary,
-              updatedLog.trigger as ExecutionTrigger['type']
+              updatedLog.trigger as ExecutionTrigger['type'],
+              executionId
             )
 
             const limit = before.usageData.limit
@@ -238,21 +338,8 @@ export class ExecutionLogger implements IExecutionLoggerService {
               limit,
             })
           } else if (sub?.referenceId) {
-            let orgLimit = 0
-            const orgRows = await db
-              .select({ orgUsageLimit: organization.orgUsageLimit })
-              .from(organization)
-              .where(eq(organization.id, sub.referenceId))
-              .limit(1)
-            const { getPlanPricing } = await import('@/lib/billing/core/billing')
-            const { basePrice } = getPlanPricing(sub.plan)
-            const minimum = (sub.seats || 1) * basePrice
-            if (orgRows.length > 0 && orgRows[0].orgUsageLimit) {
-              const configured = Number.parseFloat(orgRows[0].orgUsageLimit)
-              orgLimit = Math.max(configured, minimum)
-            } else {
-              orgLimit = minimum
-            }
+            // Get org usage limit using shared helper
+            const { limit: orgLimit } = await getOrgUsageLimit(sub.referenceId, sub.plan, sub.seats)
 
             const [{ sum: orgUsageBefore }] = await db
               .select({ sum: sql`COALESCE(SUM(${userStats.currentPeriodCost}), 0)` })
@@ -267,7 +354,8 @@ export class ExecutionLogger implements IExecutionLoggerService {
             await this.updateUserStats(
               updatedLog.workflowId,
               costSummary,
-              updatedLog.trigger as ExecutionTrigger['type']
+              updatedLog.trigger as ExecutionTrigger['type'],
+              executionId
             )
 
             const percentBefore =
@@ -292,14 +380,16 @@ export class ExecutionLogger implements IExecutionLoggerService {
           await this.updateUserStats(
             updatedLog.workflowId,
             costSummary,
-            updatedLog.trigger as ExecutionTrigger['type']
+            updatedLog.trigger as ExecutionTrigger['type'],
+            executionId
           )
         }
       } else {
         await this.updateUserStats(
           updatedLog.workflowId,
           costSummary,
-          updatedLog.trigger as ExecutionTrigger['type']
+          updatedLog.trigger as ExecutionTrigger['type'],
+          executionId
         )
       }
     } catch (e) {
@@ -307,7 +397,8 @@ export class ExecutionLogger implements IExecutionLoggerService {
         await this.updateUserStats(
           updatedLog.workflowId,
           costSummary,
-          updatedLog.trigger as ExecutionTrigger['type']
+          updatedLog.trigger as ExecutionTrigger['type'],
+          executionId
         )
       } catch {}
       logger.warn('Usage threshold notification check failed (non-fatal)', { error: e })
@@ -380,8 +471,18 @@ export class ExecutionLogger implements IExecutionLoggerService {
       totalCompletionTokens: number
       baseExecutionCharge: number
       modelCost: number
+      models?: Record<
+        string,
+        {
+          input: number
+          output: number
+          total: number
+          tokens: { input: number; output: number; total: number }
+        }
+      >
     },
-    trigger: ExecutionTrigger['type']
+    trigger: ExecutionTrigger['type'],
+    executionId?: string
   ): Promise<void> {
     if (!isBillingEnabled) {
       logger.debug('Billing is disabled, skipping user stats cost update')
@@ -418,6 +519,7 @@ export class ExecutionLogger implements IExecutionLoggerService {
         return
       }
 
+      // All costs go to currentPeriodCost - credits are applied at end of billing cycle
       const updateFields: any = {
         totalTokensUsed: sql`total_tokens_used + ${costSummary.totalTokens}`,
         totalCost: sql`total_cost + ${costToStore}`,
@@ -450,6 +552,16 @@ export class ExecutionLogger implements IExecutionLoggerService {
         trigger,
         addedCost: costToStore,
         addedTokens: costSummary.totalTokens,
+      })
+
+      // Log usage entries for auditing (batch insert for performance)
+      await logWorkflowUsageBatch({
+        userId,
+        workspaceId: workflowRecord.workspaceId ?? undefined,
+        workflowId,
+        executionId,
+        baseExecutionCharge: costSummary.baseExecutionCharge,
+        models: costSummary.models,
       })
 
       // Check if user has hit overage threshold and bill incrementally
@@ -492,10 +604,6 @@ export class ExecutionLogger implements IExecutionLoggerService {
                 type: file.type,
                 url: file.url,
                 key: file.key,
-                uploadedAt: file.uploadedAt,
-                expiresAt: file.expiresAt,
-                storageProvider: file.storageProvider,
-                bucketName: file.bucketName,
               })
             }
           }
@@ -515,10 +623,6 @@ export class ExecutionLogger implements IExecutionLoggerService {
                 type: file.type,
                 url: file.url,
                 key: file.key,
-                uploadedAt: file.uploadedAt,
-                expiresAt: file.expiresAt,
-                storageProvider: file.storageProvider,
-                bucketName: file.bucketName,
               })
             }
           }

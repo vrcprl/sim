@@ -1,3 +1,4 @@
+import { createLogger } from '@sim/logger'
 import type { GmailAttachment, GmailReadParams, GmailToolResponse } from '@/tools/gmail/types'
 import {
   createMessagesSummary,
@@ -6,6 +7,8 @@ import {
   processMessageForSummary,
 } from '@/tools/gmail/utils'
 import type { ToolConfig } from '@/tools/types'
+
+const logger = createLogger('GmailReadTool')
 
 export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
   id: 'gmail_read',
@@ -16,10 +19,6 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
   oauth: {
     required: true,
     provider: 'google-email',
-    additionalScopes: [
-      'https://www.googleapis.com/auth/gmail.labels',
-      'https://www.googleapis.com/auth/gmail.readonly',
-    ],
   },
 
   params: {
@@ -98,7 +97,7 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
       }
 
       // Set max results (default to 1 for simplicity, max 10)
-      const maxResults = params.maxResults ? Math.min(params.maxResults, 10) : 1
+      const maxResults = params.maxResults ? Math.min(Number(params.maxResults), 10) : 1
       url.searchParams.append('maxResults', maxResults.toString())
 
       return url.toString()
@@ -135,7 +134,7 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
 
       // For agentic workflows, we'll fetch the first message by default
       // If maxResults > 1, we'll return a summary of messages found
-      const maxResults = params?.maxResults ? Math.min(params.maxResults, 10) : 1
+      const maxResults = params?.maxResults ? Math.min(Number(params.maxResults), 10) : 1
 
       if (maxResults === 1) {
         try {
@@ -210,7 +209,7 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
                   allAttachments.push(...processedResult.output.attachments)
                 }
               } catch (error: any) {
-                console.error(`Error processing message ${msg.id} for attachments:`, error)
+                logger.error(`Error processing message ${msg.id} for attachments:`, error)
               }
             }
           }
@@ -225,6 +224,7 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
                   threadId: msg.threadId,
                   subject: msg.subject,
                   from: msg.from,
+                  to: msg.to,
                   date: msg.date,
                 })),
               },
@@ -265,5 +265,98 @@ export const gmailReadTool: ToolConfig<GmailReadParams, GmailToolResponse> = {
     content: { type: 'string', description: 'Text content of the email' },
     metadata: { type: 'json', description: 'Metadata of the email' },
     attachments: { type: 'file[]', description: 'Attachments of the email' },
+  },
+}
+
+interface GmailReadV2Response {
+  success: boolean
+  output: {
+    id?: string
+    threadId?: string
+    labelIds?: string[]
+    from?: string
+    to?: string
+    subject?: string
+    date?: string
+    body?: string
+    hasAttachments?: boolean
+    attachmentCount?: number
+    attachments?: GmailAttachment[]
+    results?: Array<Record<string, any>>
+  }
+}
+
+export const gmailReadV2Tool: ToolConfig<GmailReadParams, GmailReadV2Response> = {
+  id: 'gmail_read_v2',
+  name: 'Gmail Read',
+  description: 'Read emails from Gmail. Returns API-aligned fields only.',
+  version: '2.0.0',
+  oauth: gmailReadTool.oauth,
+  params: gmailReadTool.params,
+  request: gmailReadTool.request,
+  transformResponse: async (response: Response, params?: GmailReadParams) => {
+    const legacy = await gmailReadTool.transformResponse!(response, params)
+    if (!legacy.success) {
+      return {
+        success: false,
+        output: {},
+        error: legacy.error,
+      }
+    }
+
+    const metadata = (legacy.output.metadata || {}) as any
+
+    return {
+      success: true,
+      output: {
+        id: metadata.id,
+        threadId: metadata.threadId,
+        labelIds: metadata.labelIds,
+        from: metadata.from,
+        to: metadata.to,
+        subject: metadata.subject,
+        date: metadata.date,
+        body: legacy.output.content,
+        hasAttachments: metadata.hasAttachments,
+        attachmentCount: metadata.attachmentCount,
+        attachments: legacy.output.attachments || [],
+        results: metadata.results,
+      },
+    }
+  },
+  outputs: {
+    id: { type: 'string', description: 'Gmail message ID', optional: true },
+    threadId: { type: 'string', description: 'Gmail thread ID', optional: true },
+    labelIds: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Email labels',
+      optional: true,
+    },
+    from: { type: 'string', description: 'Sender email address', optional: true },
+    to: { type: 'string', description: 'Recipient email address', optional: true },
+    subject: { type: 'string', description: 'Email subject', optional: true },
+    date: { type: 'string', description: 'Email date', optional: true },
+    body: {
+      type: 'string',
+      description: 'Email body text (best-effort plain text)',
+      optional: true,
+    },
+    hasAttachments: {
+      type: 'boolean',
+      description: 'Whether the email has attachments',
+      optional: true,
+    },
+    attachmentCount: { type: 'number', description: 'Number of attachments', optional: true },
+    attachments: {
+      type: 'file[]',
+      description: 'Downloaded attachments (if enabled)',
+      optional: true,
+    },
+    results: {
+      type: 'json',
+      description: 'Summary results when reading multiple messages',
+      optional: true,
+    },
   },
 }

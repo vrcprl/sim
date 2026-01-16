@@ -1,15 +1,16 @@
 import { db } from '@sim/db'
-import { templates, workflow } from '@sim/db/schema'
+import { templates, webhook, workflow } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { authenticateApiKeyFromHeader, updateApiKeyLastUsed } from '@/lib/api-key/service'
 import { getSession } from '@/lib/auth'
 import { verifyInternalToken } from '@/lib/auth/internal'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/db-helpers'
+import { env } from '@/lib/core/config/env'
+import { PlatformEvents } from '@/lib/core/telemetry'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/persistence/utils'
 import { getWorkflowAccessContext, getWorkflowById } from '@/lib/workflows/utils'
 
 const logger = createLogger('WorkflowByIdAPI')
@@ -19,6 +20,7 @@ const UpdateWorkflowSchema = z.object({
   description: z.string().optional(),
   color: z.string().optional(),
   folderId: z.string().nullable().optional(),
+  sortOrder: z.number().int().min(0).optional(),
 })
 
 /**
@@ -37,7 +39,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1]
-      isInternalCall = await verifyInternalToken(token)
+      const verification = await verifyInternalToken(token)
+      isInternalCall = verification.valid
     }
 
     let userId: string | null = null
@@ -141,6 +144,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           isDeployed: workflowData.isDeployed || false,
           deployedAt: workflowData.deployedAt,
         },
+        // Include workflow variables
+        variables: workflowData.variables || {},
       }
 
       logger.info(`[${requestId}] Loaded workflow ${workflowId} from normalized tables`)
@@ -149,7 +154,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
       return NextResponse.json({ data: finalWorkflowData }, { status: 200 })
     }
-    return NextResponse.json({ error: 'Workflow has no normalized data' }, { status: 400 })
+
+    const emptyWorkflowData = {
+      ...workflowData,
+      state: {
+        deploymentStatuses: {},
+        blocks: {},
+        edges: [],
+        loops: {},
+        parallels: {},
+        lastSaved: Date.now(),
+        isDeployed: workflowData.isDeployed || false,
+        deployedAt: workflowData.deployedAt,
+      },
+      variables: workflowData.variables || {},
+    }
+
+    return NextResponse.json({ data: emptyWorkflowData }, { status: 200 })
   } catch (error: any) {
     const elapsed = Date.now() - startTime
     logger.error(`[${requestId}] Error fetching workflow ${workflowId} after ${elapsed}ms`, error)
@@ -209,6 +230,21 @@ export async function DELETE(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
+    // Check if this is the last workflow in the workspace
+    if (workflowData.workspaceId) {
+      const totalWorkflowsInWorkspace = await db
+        .select({ id: workflow.id })
+        .from(workflow)
+        .where(eq(workflow.workspaceId, workflowData.workspaceId))
+
+      if (totalWorkflowsInWorkspace.length <= 1) {
+        return NextResponse.json(
+          { error: 'Cannot delete the only workflow in the workspace' },
+          { status: 400 }
+        )
+      }
+    }
+
     // Check if workflow has published templates before deletion
     const { searchParams } = new URL(request.url)
     const checkTemplates = searchParams.get('check-templates') === 'true'
@@ -217,7 +253,13 @@ export async function DELETE(
     if (checkTemplates) {
       // Return template information for frontend to handle
       const publishedTemplates = await db
-        .select()
+        .select({
+          id: templates.id,
+          name: templates.name,
+          views: templates.views,
+          stars: templates.stars,
+          status: templates.status,
+        })
         .from(templates)
         .where(eq(templates.workflowId, workflowId))
 
@@ -251,7 +293,58 @@ export async function DELETE(
       }
     }
 
+    // Clean up external webhooks before deleting workflow
+    try {
+      const { cleanupExternalWebhook } = await import('@/lib/webhooks/provider-subscriptions')
+      const webhooksToCleanup = await db
+        .select({
+          webhook: webhook,
+          workflow: {
+            id: workflow.id,
+            userId: workflow.userId,
+            workspaceId: workflow.workspaceId,
+          },
+        })
+        .from(webhook)
+        .innerJoin(workflow, eq(webhook.workflowId, workflow.id))
+        .where(eq(webhook.workflowId, workflowId))
+
+      if (webhooksToCleanup.length > 0) {
+        logger.info(
+          `[${requestId}] Found ${webhooksToCleanup.length} webhook(s) to cleanup for workflow ${workflowId}`
+        )
+
+        // Clean up each webhook (don't fail if cleanup fails)
+        for (const webhookData of webhooksToCleanup) {
+          try {
+            await cleanupExternalWebhook(webhookData.webhook, webhookData.workflow, requestId)
+          } catch (cleanupError) {
+            logger.warn(
+              `[${requestId}] Failed to cleanup external webhook ${webhookData.webhook.id} during workflow deletion`,
+              cleanupError
+            )
+            // Continue with deletion even if cleanup fails
+          }
+        }
+      }
+    } catch (webhookCleanupError) {
+      logger.warn(
+        `[${requestId}] Error during webhook cleanup for workflow deletion (continuing with deletion)`,
+        webhookCleanupError
+      )
+      // Continue with workflow deletion even if webhook cleanup fails
+    }
+
     await db.delete(workflow).where(eq(workflow.id, workflowId))
+
+    try {
+      PlatformEvents.workflowDeleted({
+        workflowId,
+        workspaceId: workflowData.workspaceId || undefined,
+      })
+    } catch {
+      // Telemetry should not fail the operation
+    }
 
     const elapsed = Date.now() - startTime
     logger.info(`[${requestId}] Successfully deleted workflow ${workflowId} in ${elapsed}ms`)
@@ -311,7 +404,6 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
     const userId = session.user.id
 
-    // Parse and validate request body
     const body = await request.json()
     const updates = UpdateWorkflowSchema.parse(body)
 
@@ -347,12 +439,12 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
-    // Build update object
-    const updateData: any = { updatedAt: new Date() }
+    const updateData: Record<string, unknown> = { updatedAt: new Date() }
     if (updates.name !== undefined) updateData.name = updates.name
     if (updates.description !== undefined) updateData.description = updates.description
     if (updates.color !== undefined) updateData.color = updates.color
     if (updates.folderId !== undefined) updateData.folderId = updates.folderId
+    if (updates.sortOrder !== undefined) updateData.sortOrder = updates.sortOrder
 
     // Update the workflow
     const [updatedWorkflow] = await db

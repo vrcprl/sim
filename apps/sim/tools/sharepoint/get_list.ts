@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   SharepointGetListResponse,
   SharepointList,
@@ -17,7 +17,6 @@ export const getListTool: ToolConfig<SharepointToolParams, SharepointGetListResp
   oauth: {
     required: true,
     provider: 'sharepoint',
-    additionalScopes: ['openid', 'profile', 'email', 'Sites.Read.All', 'offline_access'],
   },
 
   params: {

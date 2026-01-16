@@ -18,7 +18,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'operation',
       title: 'Operation',
       type: 'dropdown',
-      layout: 'full',
       options: [
         { label: 'Create Export', id: 'create_matters_export' },
         { label: 'List Exports', id: 'list_matters_export' },
@@ -35,9 +34,7 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'credential',
       title: 'Google Vault Account',
       type: 'oauth-input',
-      layout: 'full',
       required: true,
-      provider: 'google-vault',
       serviceId: 'google-vault',
       requiredScopes: [
         'https://www.googleapis.com/auth/ediscovery',
@@ -50,7 +47,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'matterId',
       title: 'Matter ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Matter ID',
       condition: () => ({
         field: 'operation',
@@ -68,7 +64,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'bucketName',
       title: 'Bucket Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Vault export bucket (from cloudStorageSink.files.bucketName)',
       condition: { field: 'operation', value: 'download_export_file' },
       required: true,
@@ -77,16 +72,14 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'objectName',
       title: 'Object Name',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Vault export object (from cloudStorageSink.files.objectName)',
       condition: { field: 'operation', value: 'download_export_file' },
       required: true,
     },
     {
       id: 'fileName',
-      title: 'File Name (optional)',
+      title: 'File Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Override filename used for storage/display',
       condition: { field: 'operation', value: 'download_export_file' },
     },
@@ -94,25 +87,54 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'exportName',
       title: 'Export Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Name for the export',
       condition: { field: 'operation', value: 'create_matters_export' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a descriptive export name for Google Vault based on the user's description.
+The name should be:
+- Clear and descriptive
+- Include relevant identifiers (date, case, scope)
+- Professional and concise
+
+Examples:
+- "email export for Q4" -> Q4_2024_Email_Export
+- "drive files for legal case" -> Legal_Case_Drive_Files_Export
+- "john's messages" -> John_Doe_Messages_Export
+
+Return ONLY the export name - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the export...',
+      },
     },
     {
       id: 'holdName',
       title: 'Hold Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Name of the hold',
       condition: { field: 'operation', value: 'create_matters_holds' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a descriptive hold name for Google Vault based on the user's description.
+The name should be:
+- Clear and descriptive
+- Include relevant identifiers (case name, scope, date)
+- Professional and concise
+
+Examples:
+- "hold for investigation" -> Investigation_Hold_2024
+- "preserve emails for John" -> John_Doe_Email_Preservation
+- "legal hold for project alpha" -> Project_Alpha_Legal_Hold
+
+Return ONLY the hold name - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the hold...',
+      },
     },
     {
       id: 'corpus',
       title: 'Corpus',
       type: 'dropdown',
-      layout: 'half',
       options: [
         { id: 'MAIL', label: 'MAIL' },
         { id: 'DRIVE', label: 'DRIVE' },
@@ -127,7 +149,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'accountEmails',
       title: 'Account Emails',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Comma-separated emails (alternative to Org Unit)',
       condition: { field: 'operation', value: ['create_matters_holds', 'create_matters_export'] },
     },
@@ -135,7 +156,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'orgUnitId',
       title: 'Org Unit ID',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'Org Unit ID (alternative to emails)',
       condition: { field: 'operation', value: ['create_matters_holds', 'create_matters_export'] },
     },
@@ -143,7 +163,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'exportId',
       title: 'Export ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Export ID (optional to fetch a specific export)',
       condition: { field: 'operation', value: 'list_matters_export' },
     },
@@ -151,7 +170,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'holdId',
       title: 'Hold ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Hold ID (optional to fetch a specific hold)',
       condition: { field: 'operation', value: 'list_matters_holds' },
     },
@@ -159,7 +177,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'pageSize',
       title: 'Page Size',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'Number of items to return',
       condition: {
         field: 'operation',
@@ -170,7 +187,6 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'pageToken',
       title: 'Page Token',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'Pagination token',
       condition: {
         field: 'operation',
@@ -182,25 +198,49 @@ export const GoogleVaultBlock: BlockConfig = {
       id: 'name',
       title: 'Matter Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Matter name',
       condition: { field: 'operation', value: 'create_matters' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a descriptive matter name for Google Vault based on the user's description.
+The name should be:
+- Clear and descriptive
+- Professional and suitable for legal/compliance purposes
+- Include relevant identifiers if applicable
+
+Examples:
+- "investigation into data breach" -> Data_Breach_Investigation_2024
+- "lawsuit from acme corp" -> Acme_Corp_Litigation
+- "HR complaint case" -> HR_Complaint_Matter_001
+
+Return ONLY the matter name - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the matter...',
+      },
     },
     {
       id: 'description',
       title: 'Description',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Optional description for the matter',
       condition: { field: 'operation', value: 'create_matters' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a professional description for a Google Vault matter based on the user's request.
+The description should:
+- Clearly explain the purpose and scope of the matter
+- Be concise but informative (1-3 sentences)
+- Use professional language appropriate for legal/compliance contexts
+
+Return ONLY the description text - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the purpose of this matter...',
+      },
     },
     // Optional get specific matter by ID
     {
       id: 'matterId',
       title: 'Matter ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Matter ID (optional to fetch a specific matter)',
       condition: { field: 'operation', value: 'list_matters' },
     },
@@ -276,9 +316,16 @@ export const GoogleVaultBlock: BlockConfig = {
     description: { type: 'string', description: 'Matter description' },
   },
   outputs: {
-    // Common outputs
-    output: { type: 'json', description: 'Vault API response data' },
-    // Download export file output
+    matters: { type: 'json', description: 'Array of matter objects (for list_matters)' },
+    exports: { type: 'json', description: 'Array of export objects (for list_matters_export)' },
+    holds: { type: 'json', description: 'Array of hold objects (for list_matters_holds)' },
+    matter: { type: 'json', description: 'Created matter object (for create_matters)' },
+    export: { type: 'json', description: 'Created export object (for create_matters_export)' },
+    hold: { type: 'json', description: 'Created hold object (for create_matters_holds)' },
     file: { type: 'json', description: 'Downloaded export file (UserFile) from execution files' },
+    nextPageToken: {
+      type: 'string',
+      description: 'Token for fetching next page of results (for list operations)',
+    },
   },
 }

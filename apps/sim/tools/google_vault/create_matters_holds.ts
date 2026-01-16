@@ -12,7 +12,6 @@ export const createMattersHoldsTool: ToolConfig<GoogleVaultCreateMattersHoldsPar
   oauth: {
     required: true,
     provider: 'google-vault',
-    additionalScopes: ['https://www.googleapis.com/auth/ediscovery'],
   },
 
   params: {
@@ -82,6 +81,10 @@ export const createMattersHoldsTool: ToolConfig<GoogleVaultCreateMattersHoldsPar
     if (!response.ok) {
       throw new Error(data.error?.message || 'Failed to create hold')
     }
-    return { success: true, output: data }
+    return { success: true, output: { hold: data } }
+  },
+
+  outputs: {
+    hold: { type: 'json', description: 'Created hold object' },
   },
 }

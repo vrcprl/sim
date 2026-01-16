@@ -1,25 +1,27 @@
 import { db } from '@sim/db'
 import { copilotChats } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, desc, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
+import { generateChatTitle } from '@/lib/copilot/chat-title'
+import { getCopilotModel } from '@/lib/copilot/config'
+import { SIM_AGENT_API_URL_DEFAULT, SIM_AGENT_VERSION } from '@/lib/copilot/constants'
 import {
   authenticateCopilotRequestSessionOnly,
   createBadRequestResponse,
   createInternalServerErrorResponse,
   createRequestTracker,
   createUnauthorizedResponse,
-} from '@/lib/copilot/auth'
-import { getCopilotModel } from '@/lib/copilot/config'
+} from '@/lib/copilot/request-helpers'
+import { getCredentialsServerTool } from '@/lib/copilot/tools/server/user/get-credentials'
 import type { CopilotProviderConfig } from '@/lib/copilot/types'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
-import { SIM_AGENT_API_URL_DEFAULT, SIM_AGENT_VERSION } from '@/lib/sim-agent/constants'
-import { generateChatTitle } from '@/lib/sim-agent/utils'
-import { createFileContent, isSupportedFileType } from '@/lib/uploads/file-utils'
-import { S3_COPILOT_CONFIG } from '@/lib/uploads/setup'
-import { downloadFile, getStorageProvider } from '@/lib/uploads/storage-client'
+import { env } from '@/lib/core/config/env'
+import { CopilotFiles } from '@/lib/uploads'
+import { createFileContent } from '@/lib/uploads/utils/file-utils'
+import { tools } from '@/tools/registry'
+import { getLatestVersionTools, stripVersionSuffix } from '@/tools/utils'
 
 const logger = createLogger('CopilotChatAPI')
 
@@ -44,16 +46,28 @@ const ChatMessageSchema = z.object({
       'gpt-5',
       'gpt-5-medium',
       'gpt-5-high',
+      'gpt-5.1-fast',
+      'gpt-5.1',
+      'gpt-5.1-medium',
+      'gpt-5.1-high',
+      'gpt-5-codex',
+      'gpt-5.1-codex',
+      'gpt-5.2',
+      'gpt-5.2-codex',
+      'gpt-5.2-pro',
       'gpt-4o',
       'gpt-4.1',
       'o3',
       'claude-4-sonnet',
+      'claude-4.5-haiku',
       'claude-4.5-sonnet',
+      'claude-4.5-opus',
       'claude-4.1-opus',
+      'gemini-3-pro',
     ])
     .optional()
-    .default('claude-4.5-sonnet'),
-  mode: z.enum(['ask', 'agent']).optional().default('agent'),
+    .default('claude-4.5-opus'),
+  mode: z.enum(['ask', 'agent', 'plan']).optional().default('agent'),
   prefetch: z.boolean().optional(),
   createNewChat: z.boolean().optional().default(false),
   stream: z.boolean().optional().default(true),
@@ -86,6 +100,7 @@ const ChatMessageSchema = z.object({
       })
     )
     .optional(),
+  commands: z.array(z.string()).optional(),
 })
 
 /**
@@ -121,6 +136,7 @@ export async function POST(req: NextRequest) {
       provider,
       conversationId,
       contexts,
+      commands,
     } = ChatMessageSchema.parse(body)
     // Ensure we have a consistent user message ID for this request
     const userMessageIdToUse = userMessageId || crypto.randomUUID()
@@ -201,45 +217,15 @@ export async function POST(req: NextRequest) {
     // Process file attachments if present
     const processedFileContents: any[] = []
     if (fileAttachments && fileAttachments.length > 0) {
-      for (const attachment of fileAttachments) {
-        try {
-          // Check if file type is supported
-          if (!isSupportedFileType(attachment.media_type)) {
-            logger.warn(`[${tracker.requestId}] Unsupported file type: ${attachment.media_type}`)
-            continue
-          }
+      const processedAttachments = await CopilotFiles.processCopilotAttachments(
+        fileAttachments,
+        tracker.requestId
+      )
 
-          const storageProvider = getStorageProvider()
-          let fileBuffer: Buffer
-
-          if (storageProvider === 's3') {
-            fileBuffer = await downloadFile(attachment.key, {
-              bucket: S3_COPILOT_CONFIG.bucket,
-              region: S3_COPILOT_CONFIG.region,
-            })
-          } else if (storageProvider === 'blob') {
-            const { BLOB_COPILOT_CONFIG } = await import('@/lib/uploads/setup')
-            fileBuffer = await downloadFile(attachment.key, {
-              containerName: BLOB_COPILOT_CONFIG.containerName,
-              accountName: BLOB_COPILOT_CONFIG.accountName,
-              accountKey: BLOB_COPILOT_CONFIG.accountKey,
-              connectionString: BLOB_COPILOT_CONFIG.connectionString,
-            })
-          } else {
-            fileBuffer = await downloadFile(attachment.key)
-          }
-
-          // Convert to format
-          const fileContent = createFileContent(fileBuffer, attachment.media_type)
-          if (fileContent) {
-            processedFileContents.push(fileContent)
-          }
-        } catch (error) {
-          logger.error(
-            `[${tracker.requestId}] Failed to process file ${attachment.filename}:`,
-            error
-          )
-          // Continue processing other files
+      for (const { buffer, attachment } of processedAttachments) {
+        const fileContent = createFileContent(buffer, attachment.media_type)
+        if (fileContent) {
+          processedFileContents.push(fileContent)
         }
       }
     }
@@ -253,39 +239,15 @@ export async function POST(req: NextRequest) {
         // This is a message with file attachments - rebuild with content array
         const content: any[] = [{ type: 'text', text: msg.content }]
 
-        // Process file attachments for historical messages
-        for (const attachment of msg.fileAttachments) {
-          try {
-            if (isSupportedFileType(attachment.media_type)) {
-              const storageProvider = getStorageProvider()
-              let fileBuffer: Buffer
+        const processedHistoricalAttachments = await CopilotFiles.processCopilotAttachments(
+          msg.fileAttachments,
+          tracker.requestId
+        )
 
-              if (storageProvider === 's3') {
-                fileBuffer = await downloadFile(attachment.key, {
-                  bucket: S3_COPILOT_CONFIG.bucket,
-                  region: S3_COPILOT_CONFIG.region,
-                })
-              } else if (storageProvider === 'blob') {
-                const { BLOB_COPILOT_CONFIG } = await import('@/lib/uploads/setup')
-                fileBuffer = await downloadFile(attachment.key, {
-                  containerName: BLOB_COPILOT_CONFIG.containerName,
-                  accountName: BLOB_COPILOT_CONFIG.accountName,
-                  accountKey: BLOB_COPILOT_CONFIG.accountKey,
-                  connectionString: BLOB_COPILOT_CONFIG.connectionString,
-                })
-              } else {
-                fileBuffer = await downloadFile(attachment.key)
-              }
-              const fileContent = createFileContent(fileBuffer, attachment.media_type)
-              if (fileContent) {
-                content.push(fileContent)
-              }
-            }
-          } catch (error) {
-            logger.error(
-              `[${tracker.requestId}] Failed to process historical file ${attachment.filename}:`,
-              error
-            )
+        for (const { buffer, attachment } of processedHistoricalAttachments) {
+          const fileContent = createFileContent(buffer, attachment.media_type)
+          if (fileContent) {
+            content.push(fileContent)
           }
         }
 
@@ -347,6 +309,14 @@ export async function POST(req: NextRequest) {
           apiVersion: 'preview',
           endpoint: env.AZURE_OPENAI_ENDPOINT,
         }
+      } else if (providerEnv === 'vertex') {
+        providerConfig = {
+          provider: 'vertex',
+          model: modelToUse,
+          apiKey: env.COPILOT_API_KEY,
+          vertexProject: env.VERTEX_PROJECT,
+          vertexLocation: env.VERTEX_LOCATION,
+        }
       } else {
         providerConfig = {
           provider: providerEnv,
@@ -356,18 +326,128 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Determine provider and conversationId to use for this request
+    // Determine conversationId to use for this request
     const effectiveConversationId =
       (currentChat?.conversationId as string | undefined) || conversationId
 
-    // If we have a conversationId, only send the most recent user message; else send full history
-    const latestUserMessage =
-      [...messages].reverse().find((m) => m?.role === 'user') || messages[messages.length - 1]
-    const messagesForAgent = effectiveConversationId ? [latestUserMessage] : messages
+    // For agent/build mode, fetch credentials and build tool definitions
+    let integrationTools: any[] = []
+    let baseTools: any[] = []
+    let credentials: {
+      oauth: Record<
+        string,
+        { accessToken: string; accountId: string; name: string; expiresAt?: string }
+      >
+      apiKeys: string[]
+      metadata?: {
+        connectedOAuth: Array<{ provider: string; name: string; scopes?: string[] }>
+        configuredApiKeys: string[]
+      }
+    } | null = null
+
+    if (mode === 'agent') {
+      // Build base tools (executed locally, not deferred)
+      // Include function_execute for code execution capability
+      baseTools = [
+        {
+          name: 'function_execute',
+          description:
+            'Execute JavaScript code to perform calculations, data transformations, API calls, or any programmatic task. Code runs in a secure sandbox with fetch() available. Write plain statements (not wrapped in functions). Example: const res = await fetch(url); const data = await res.json(); return data;',
+          input_schema: {
+            type: 'object',
+            properties: {
+              code: {
+                type: 'string',
+                description:
+                  'Raw JavaScript statements to execute. Code is auto-wrapped in async context. Use fetch() for HTTP requests. Write like: const res = await fetch(url); return await res.json();',
+              },
+            },
+            required: ['code'],
+          },
+          executeLocally: true,
+        },
+      ]
+      // Fetch user credentials (OAuth + API keys) - pass workflowId to get workspace env vars
+      try {
+        const rawCredentials = await getCredentialsServerTool.execute(
+          { workflowId },
+          { userId: authenticatedUserId }
+        )
+
+        // Transform OAuth credentials to map format: { [provider]: { accessToken, accountId, ... } }
+        const oauthMap: Record<
+          string,
+          { accessToken: string; accountId: string; name: string; expiresAt?: string }
+        > = {}
+        const connectedOAuth: Array<{ provider: string; name: string; scopes?: string[] }> = []
+        for (const cred of rawCredentials?.oauth?.connected?.credentials || []) {
+          if (cred.accessToken) {
+            oauthMap[cred.provider] = {
+              accessToken: cred.accessToken,
+              accountId: cred.id,
+              name: cred.name,
+            }
+            connectedOAuth.push({
+              provider: cred.provider,
+              name: cred.name,
+            })
+          }
+        }
+
+        credentials = {
+          oauth: oauthMap,
+          apiKeys: rawCredentials?.environment?.variableNames || [],
+          metadata: {
+            connectedOAuth,
+            configuredApiKeys: rawCredentials?.environment?.variableNames || [],
+          },
+        }
+
+        logger.info(`[${tracker.requestId}] Fetched credentials for build mode`, {
+          oauthProviders: Object.keys(oauthMap),
+          apiKeyCount: credentials.apiKeys.length,
+        })
+      } catch (error) {
+        logger.warn(`[${tracker.requestId}] Failed to fetch credentials`, {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+
+      // Build tool definitions (schemas only)
+      try {
+        const { createUserToolSchema } = await import('@/tools/params')
+
+        const latestTools = getLatestVersionTools(tools)
+
+        integrationTools = Object.entries(latestTools).map(([toolId, toolConfig]) => {
+          const userSchema = createUserToolSchema(toolConfig)
+          const strippedName = stripVersionSuffix(toolId)
+          return {
+            name: strippedName,
+            description: toolConfig.description || toolConfig.name || strippedName,
+            input_schema: userSchema,
+            defer_loading: true, // Anthropic Advanced Tool Use
+            ...(toolConfig.oauth?.required && {
+              oauth: {
+                required: true,
+                provider: toolConfig.oauth.provider,
+              },
+            }),
+          }
+        })
+
+        logger.info(`[${tracker.requestId}] Built tool definitions for build mode`, {
+          integrationToolCount: integrationTools.length,
+        })
+      } catch (error) {
+        logger.warn(`[${tracker.requestId}] Failed to build tool definitions`, {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
 
     const requestPayload = {
-      messages: messagesForAgent,
-      chatMessages: messages, // Full unfiltered messages array
+      message: message, // Just send the current user message text
       workflowId,
       userId: authenticatedUserId,
       stream: stream,
@@ -382,14 +462,27 @@ export async function POST(req: NextRequest) {
       ...(session?.user?.name && { userName: session.user.name }),
       ...(agentContexts.length > 0 && { context: agentContexts }),
       ...(actualChatId ? { chatId: actualChatId } : {}),
+      ...(processedFileContents.length > 0 && { fileAttachments: processedFileContents }),
+      // For build/agent mode, include tools and credentials
+      ...(integrationTools.length > 0 && { tools: integrationTools }),
+      ...(baseTools.length > 0 && { baseTools }),
+      ...(credentials && { credentials }),
+      ...(commands && commands.length > 0 && { commands }),
     }
 
     try {
-      logger.info(`[${tracker.requestId}] About to call Sim Agent with context`, {
-        context: (requestPayload as any).context,
-        messagesCount: messagesForAgent.length,
-        chatMessagesCount: messages.length,
+      logger.info(`[${tracker.requestId}] About to call Sim Agent`, {
+        hasContext: agentContexts.length > 0,
+        contextCount: agentContexts.length,
         hasConversationId: !!effectiveConversationId,
+        hasFileAttachments: processedFileContents.length > 0,
+        messageLength: message.length,
+        mode,
+        hasTools: integrationTools.length > 0,
+        toolCount: integrationTools.length,
+        hasBaseTools: baseTools.length > 0,
+        baseToolCount: baseTools.length,
+        hasCredentials: !!credentials,
       })
     } catch {}
 
@@ -462,8 +555,6 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(chatIdEvent))
             logger.debug(`[${tracker.requestId}] Sent initial chatId event to client`)
           }
-
-          // Note: context_usage events are forwarded from sim-agent (which has accurate token counts)
 
           // Start title generation in parallel if needed
           if (actualChatId && !currentChat?.title && conversationHistory.length === 0) {
@@ -596,7 +687,6 @@ export async function POST(req: NextRequest) {
                             lastSafeDoneResponseId = responseIdFromDone
                           }
                         }
-                        // Note: context_usage events are forwarded from sim-agent
                         break
 
                       case 'error':
@@ -722,55 +812,62 @@ export async function POST(req: NextRequest) {
               toolNames: toolCalls.map((tc) => tc?.name).filter(Boolean),
             })
 
-            // Save messages to database after streaming completes (including aborted messages)
+            // NOTE: Messages are saved by the client via update-messages endpoint with full contentBlocks.
+            // Server only updates conversationId here to avoid overwriting client's richer save.
             if (currentChat) {
-              const updatedMessages = [...conversationHistory, userMessage]
-
-              // Save assistant message if there's any content or tool calls (even partial from abort)
-              if (assistantContent.trim() || toolCalls.length > 0) {
-                const assistantMessage = {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: assistantContent,
-                  timestamp: new Date().toISOString(),
-                  ...(toolCalls.length > 0 && { toolCalls }),
-                }
-                updatedMessages.push(assistantMessage)
-                logger.info(
-                  `[${tracker.requestId}] Saving assistant message with content (${assistantContent.length} chars) and ${toolCalls.length} tool calls`
-                )
-              } else {
-                logger.info(
-                  `[${tracker.requestId}] No assistant content or tool calls to save (aborted before response)`
-                )
-              }
-
               // Persist only a safe conversationId to avoid continuing from a state that expects tool outputs
               const previousConversationId = currentChat?.conversationId as string | undefined
               const responseId = lastSafeDoneResponseId || previousConversationId || undefined
 
-              // Update chat in database immediately (without title)
-              await db
-                .update(copilotChats)
-                .set({
-                  messages: updatedMessages,
-                  updatedAt: new Date(),
-                  ...(responseId ? { conversationId: responseId } : {}),
-                })
-                .where(eq(copilotChats.id, actualChatId!))
+              if (responseId) {
+                await db
+                  .update(copilotChats)
+                  .set({
+                    updatedAt: new Date(),
+                    conversationId: responseId,
+                  })
+                  .where(eq(copilotChats.id, actualChatId!))
 
-              logger.info(`[${tracker.requestId}] Updated chat ${actualChatId} with new messages`, {
-                messageCount: updatedMessages.length,
-                savedUserMessage: true,
-                savedAssistantMessage: assistantContent.trim().length > 0,
-                updatedConversationId: responseId || null,
-              })
+                logger.info(
+                  `[${tracker.requestId}] Updated conversationId for chat ${actualChatId}`,
+                  {
+                    updatedConversationId: responseId,
+                  }
+                )
+              }
             }
           } catch (error) {
             logger.error(`[${tracker.requestId}] Error processing stream:`, error)
-            controller.error(error)
+
+            // Send an error event to the client before closing so it knows what happened
+            try {
+              const errorMessage =
+                error instanceof Error && error.message === 'terminated'
+                  ? 'Connection to AI service was interrupted. Please try again.'
+                  : 'An unexpected error occurred while processing the response.'
+              const encoder = new TextEncoder()
+
+              // Send error as content so it shows in the chat
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: 'content', data: `\n\n_${errorMessage}_` })}\n\n`
+                )
+              )
+              // Send done event to properly close the stream on client
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`))
+            } catch (enqueueError) {
+              // Stream might already be closed, that's ok
+              logger.warn(
+                `[${tracker.requestId}] Could not send error event to client:`,
+                enqueueError
+              )
+            }
           } finally {
-            controller.close()
+            try {
+              controller.close()
+            } catch {
+              // Controller might already be closed
+            }
           }
         },
       })
@@ -941,6 +1038,8 @@ export async function GET(req: NextRequest) {
         title: copilotChats.title,
         model: copilotChats.model,
         messages: copilotChats.messages,
+        planArtifact: copilotChats.planArtifact,
+        config: copilotChats.config,
         createdAt: copilotChats.createdAt,
         updatedAt: copilotChats.updatedAt,
       })
@@ -957,7 +1056,8 @@ export async function GET(req: NextRequest) {
       model: chat.model,
       messages: Array.isArray(chat.messages) ? chat.messages : [],
       messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
-      previewYaml: null, // Not needed for chat list
+      planArtifact: chat.planArtifact || null,
+      config: chat.config || null,
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     }))

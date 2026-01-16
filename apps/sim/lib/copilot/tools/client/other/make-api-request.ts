@@ -1,11 +1,12 @@
+import { createLogger } from '@sim/logger'
 import { Globe2, Loader2, MinusCircle, XCircle } from 'lucide-react'
 import {
   BaseClientTool,
   type BaseClientToolMetadata,
   ClientToolCallState,
 } from '@/lib/copilot/tools/client/base-tool'
+import { registerToolUIConfig } from '@/lib/copilot/tools/client/ui-config'
 import { ExecuteResponseSuccessSchema } from '@/lib/copilot/tools/shared/schemas'
-import { createLogger } from '@/lib/logs/console/logger'
 
 interface MakeApiRequestArgs {
   url: string
@@ -27,7 +28,7 @@ export class MakeApiRequestClientTool extends BaseClientTool {
       [ClientToolCallState.generating]: { text: 'Preparing API request', icon: Loader2 },
       [ClientToolCallState.pending]: { text: 'Review API request', icon: Globe2 },
       [ClientToolCallState.executing]: { text: 'Executing API request', icon: Loader2 },
-      [ClientToolCallState.success]: { text: 'API request complete', icon: Globe2 },
+      [ClientToolCallState.success]: { text: 'Completed API request', icon: Globe2 },
       [ClientToolCallState.error]: { text: 'Failed to execute API request', icon: XCircle },
       [ClientToolCallState.rejected]: { text: 'Skipped API request', icon: MinusCircle },
       [ClientToolCallState.aborted]: { text: 'Aborted API request', icon: XCircle },
@@ -35,6 +36,61 @@ export class MakeApiRequestClientTool extends BaseClientTool {
     interrupt: {
       accept: { text: 'Execute', icon: Globe2 },
       reject: { text: 'Skip', icon: MinusCircle },
+    },
+    uiConfig: {
+      interrupt: {
+        accept: { text: 'Execute', icon: Globe2 },
+        reject: { text: 'Skip', icon: MinusCircle },
+        showAllowOnce: true,
+        showAllowAlways: true,
+      },
+      paramsTable: {
+        columns: [
+          { key: 'method', label: 'Method', width: '26%', editable: true, mono: true },
+          { key: 'url', label: 'Endpoint', width: '74%', editable: true, mono: true },
+        ],
+        extractRows: (params) => {
+          return [['request', (params.method || 'GET').toUpperCase(), params.url || '']]
+        },
+      },
+    },
+    getDynamicText: (params, state) => {
+      if (params?.url && typeof params.url === 'string') {
+        const method = params.method || 'GET'
+        let url = params.url
+
+        // Extract domain from URL for cleaner display
+        try {
+          const urlObj = new URL(url)
+          url = urlObj.hostname + urlObj.pathname
+          if (url.length > 40) {
+            url = `${url.slice(0, 40)}...`
+          }
+        } catch {
+          // If URL parsing fails, just truncate
+          if (url.length > 40) {
+            url = `${url.slice(0, 40)}...`
+          }
+        }
+
+        switch (state) {
+          case ClientToolCallState.success:
+            return `${method} ${url} complete`
+          case ClientToolCallState.executing:
+            return `${method} ${url}`
+          case ClientToolCallState.generating:
+            return `Preparing ${method} ${url}`
+          case ClientToolCallState.pending:
+            return `Review ${method} ${url}`
+          case ClientToolCallState.error:
+            return `Failed ${method} ${url}`
+          case ClientToolCallState.rejected:
+            return `Skipped ${method} ${url}`
+          case ClientToolCallState.aborted:
+            return `Aborted ${method} ${url}`
+        }
+      }
+      return undefined
     },
   }
 
@@ -72,3 +128,6 @@ export class MakeApiRequestClientTool extends BaseClientTool {
     await this.handleAccept(args)
   }
 }
+
+// Register UI config at module load
+registerToolUIConfig(MakeApiRequestClientTool.id, MakeApiRequestClientTool.metadata.uiConfig!)

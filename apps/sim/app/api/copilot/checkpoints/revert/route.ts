@@ -1,5 +1,6 @@
 import { db } from '@sim/db'
 import { workflowCheckpoints, workflow as workflowTable } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -9,9 +10,9 @@ import {
   createNotFoundResponse,
   createRequestTracker,
   createUnauthorizedResponse,
-} from '@/lib/copilot/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateUUID } from '@/lib/security/input-validation'
+} from '@/lib/copilot/request-helpers'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { isUuidV4 } from '@/executor/constants'
 
 const logger = createLogger('CheckpointRevertAPI')
 
@@ -86,14 +87,13 @@ export async function POST(request: NextRequest) {
       isDeployed: cleanedState.isDeployed,
     })
 
-    const workflowIdValidation = validateUUID(checkpoint.workflowId, 'workflowId')
-    if (!workflowIdValidation.isValid) {
-      logger.error(`[${tracker.requestId}] Invalid workflow ID: ${workflowIdValidation.error}`)
+    if (!isUuidV4(checkpoint.workflowId)) {
+      logger.error(`[${tracker.requestId}] Invalid workflow ID format`)
       return NextResponse.json({ error: 'Invalid workflow ID format' }, { status: 400 })
     }
 
     const stateResponse = await fetch(
-      `${request.nextUrl.origin}/api/workflows/${checkpoint.workflowId}/state`,
+      `${getBaseUrl()}/api/workflows/${checkpoint.workflowId}/state`,
       {
         method: 'PUT',
         headers: {
@@ -117,6 +117,18 @@ export async function POST(request: NextRequest) {
     logger.info(
       `[${tracker.requestId}] Successfully reverted workflow ${checkpoint.workflowId} to checkpoint ${checkpointId}`
     )
+
+    // Delete the checkpoint after successfully reverting to it
+    try {
+      await db.delete(workflowCheckpoints).where(eq(workflowCheckpoints.id, checkpointId))
+      logger.info(`[${tracker.requestId}] Deleted checkpoint after reverting`, { checkpointId })
+    } catch (deleteError) {
+      logger.warn(`[${tracker.requestId}] Failed to delete checkpoint after revert`, {
+        checkpointId,
+        error: deleteError,
+      })
+      // Don't fail the request if deletion fails - the revert was successful
+    }
 
     return NextResponse.json({
       success: true,

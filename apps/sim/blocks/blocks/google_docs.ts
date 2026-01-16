@@ -20,7 +20,6 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'operation',
       title: 'Operation',
       type: 'dropdown',
-      layout: 'full',
       options: [
         { label: 'Read Document', id: 'read' },
         { label: 'Write to Document', id: 'write' },
@@ -33,11 +32,12 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'credential',
       title: 'Google Account',
       type: 'oauth-input',
-      layout: 'full',
       required: true,
-      provider: 'google-docs',
       serviceId: 'google-docs',
-      requiredScopes: ['https://www.googleapis.com/auth/drive.file'],
+      requiredScopes: [
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive',
+      ],
       placeholder: 'Select Google account',
     },
     // Document selector (basic mode)
@@ -45,10 +45,8 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'documentId',
       title: 'Select Document',
       type: 'file-selector',
-      layout: 'full',
       canonicalParamId: 'documentId',
-      provider: 'google-drive',
-      serviceId: 'google-drive',
+      serviceId: 'google-docs',
       requiredScopes: [],
       mimeType: 'application/vnd.google-apps.document',
       placeholder: 'Select a document',
@@ -61,7 +59,6 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'manualDocumentId',
       title: 'Document ID',
       type: 'short-input',
-      layout: 'full',
       canonicalParamId: 'documentId',
       placeholder: 'Enter document ID',
       dependsOn: ['credential'],
@@ -73,20 +70,25 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'title',
       title: 'Document Title',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter title for the new document',
       condition: { field: 'operation', value: 'create' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a clear, descriptive document title based on the user's request.
+The title should be concise but informative about the document's purpose.
+
+Return ONLY the document title - no explanations, no extra text.`,
+        placeholder: 'Describe the document...',
+      },
     },
     // Folder selector (basic mode)
     {
       id: 'folderSelector',
       title: 'Select Parent Folder',
       type: 'file-selector',
-      layout: 'full',
       canonicalParamId: 'folderId',
-      provider: 'google-drive',
-      serviceId: 'google-drive',
+      serviceId: 'google-docs',
       requiredScopes: [],
       mimeType: 'application/vnd.google-apps.folder',
       placeholder: 'Select a parent folder',
@@ -99,7 +101,6 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'folderId',
       title: 'Parent Folder ID',
       type: 'short-input',
-      layout: 'full',
       canonicalParamId: 'folderId',
       placeholder: 'Enter parent folder ID (leave empty for root folder)',
       dependsOn: ['credential'],
@@ -111,19 +112,33 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'content',
       title: 'Content',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Enter document content',
       condition: { field: 'operation', value: 'write' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate document content based on the user's request.
+The content should be well-structured and appropriate for a Google Doc.
+
+Return ONLY the document content - no explanations, no extra text.`,
+        placeholder: 'Describe the document content you want to write...',
+      },
     },
     // Content Field for create operation
     {
       id: 'content',
       title: 'Content',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Enter document content',
       condition: { field: 'operation', value: 'create' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate initial document content based on the user's request.
+The content should be well-structured and appropriate for a new Google Doc.
+
+Return ONLY the document content - no explanations, no extra text.`,
+        placeholder: 'Describe the document content you want to create...',
+      },
     },
   ],
   tools: {

@@ -1,5 +1,8 @@
+import { createMockLogger as createSimTestingMockLogger } from '@sim/testing'
 import { NextRequest } from 'next/server'
 import { vi } from 'vitest'
+
+export { createMockLogger } from '@sim/testing'
 
 export interface MockUser {
   id: string
@@ -97,7 +100,6 @@ export const sampleWorkflowState = {
       },
       enabled: true,
       horizontalHandles: true,
-      isWide: false,
       advancedMode: false,
       triggerMode: false,
       height: 95,
@@ -126,7 +128,6 @@ export const sampleWorkflowState = {
       },
       enabled: true,
       horizontalHandles: true,
-      isWide: false,
       advancedMode: false,
       triggerMode: false,
       height: 680,
@@ -216,12 +217,11 @@ export const mockDb = {
   })),
 }
 
-export const mockLogger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-}
+/**
+ * Mock logger using @sim/testing createMockLogger.
+ * This provides a consistent mock logger across all API tests.
+ */
+export const mockLogger = createSimTestingMockLogger()
 
 export const mockUser = {
   id: 'user-123',
@@ -307,24 +307,20 @@ export function createMockRequest(
 }
 
 export function mockExecutionDependencies() {
-  vi.mock('@/lib/utils', async () => {
-    const actual = await vi.importActual('@/lib/utils')
-    return {
-      ...(actual as any),
-      decryptSecret: vi.fn().mockImplementation((encrypted: string) => {
-        const entries = Object.entries(mockEnvironmentVars)
-        const found = entries.find(([_, val]) => val === encrypted)
-        const key = found ? found[0] : null
+  vi.mock('@/lib/core/security/encryption', () => ({
+    decryptSecret: vi.fn().mockImplementation((encrypted: string) => {
+      const entries = Object.entries(mockEnvironmentVars)
+      const found = entries.find(([_, val]) => val === encrypted)
+      const key = found ? found[0] : null
 
-        return Promise.resolve({
-          decrypted:
-            key && key in mockDecryptedEnvVars
-              ? mockDecryptedEnvVars[key as keyof typeof mockDecryptedEnvVars]
-              : 'decrypted-value',
-        })
-      }),
-    }
-  })
+      return Promise.resolve({
+        decrypted:
+          key && key in mockDecryptedEnvVars
+            ? mockDecryptedEnvVars[key as keyof typeof mockDecryptedEnvVars]
+            : 'decrypted-value',
+      })
+    }),
+  }))
 
   vi.mock('@/lib/logs/execution/trace-spans/trace-spans', () => ({
     buildTraceSpans: vi.fn().mockReturnValue({
@@ -457,7 +453,7 @@ export function mockWorkflowAccessValidation(shouldSucceed = true) {
 }
 
 export async function getMockedDependencies() {
-  const utilsModule = await import('@/lib/utils')
+  const encryptionModule = await import('@/lib/core/security/encryption')
   const traceSpansModule = await import('@/lib/logs/execution/trace-spans/trace-spans')
   const workflowUtilsModule = await import('@/lib/workflows/utils')
   const executorModule = await import('@/executor')
@@ -465,7 +461,7 @@ export async function getMockedDependencies() {
   const dbModule = await import('@sim/db')
 
   return {
-    decryptSecret: utilsModule.decryptSecret,
+    decryptSecret: encryptionModule.decryptSecret,
     buildTraceSpans: traceSpansModule.buildTraceSpans,
     updateWorkflowRunCounts: workflowUtilsModule.updateWorkflowRunCounts,
     Executor: executorModule.Executor,
@@ -735,10 +731,11 @@ export function mockKnowledgeSchemas() {
 }
 
 /**
- * Mock console logger
+ * Mock console logger using the shared mockLogger instance.
+ * This ensures tests can assert on the same mockLogger instance exported from this module.
  */
 export function mockConsoleLogger() {
-  vi.doMock('@/lib/logs/console/logger', () => ({
+  vi.doMock('@sim/logger', () => ({
     createLogger: vi.fn().mockReturnValue(mockLogger),
   }))
 }
@@ -803,7 +800,7 @@ export function mockFileSystem(
 export function mockEncryption(options: { encryptedValue?: string; decryptedValue?: string } = {}) {
   const { encryptedValue = 'encrypted-value', decryptedValue = 'decrypted-value' } = options
 
-  vi.doMock('@/lib/utils', () => ({
+  vi.doMock('@/lib/core/security/encryption', () => ({
     encryptSecret: vi.fn().mockResolvedValue({ encrypted: encryptedValue }),
     decryptSecret: vi.fn().mockResolvedValue({ decrypted: decryptedValue }),
   }))
@@ -834,62 +831,121 @@ export function createStorageProviderMocks(options: StorageProviderMockOptions =
     uploadHeaders = {},
   } = options
 
-  // Ensure UUID is mocked
   mockUuid('mock-uuid-1234')
   mockCryptoUuid('mock-uuid-1234-5678')
 
-  // Base upload utilities
+  const uploadFileMock = vi.fn().mockResolvedValue({
+    path: '/api/files/serve/test-key.txt',
+    key: 'test-key.txt',
+    name: 'test.txt',
+    size: 100,
+    type: 'text/plain',
+  })
+  const downloadFileMock = vi.fn().mockResolvedValue(Buffer.from('test content'))
+  const deleteFileMock = vi.fn().mockResolvedValue(undefined)
+  const hasCloudStorageMock = vi.fn().mockReturnValue(isCloudEnabled)
+
+  const generatePresignedUploadUrlMock = vi.fn().mockImplementation((params: any) => {
+    const { fileName, context } = params
+    const timestamp = Date.now()
+    const random = Math.random().toString(36).substring(2, 9)
+
+    let key = ''
+    if (context === 'knowledge-base') {
+      key = `kb/${timestamp}-${random}-${fileName}`
+    } else if (context === 'chat') {
+      key = `chat/${timestamp}-${random}-${fileName}`
+    } else if (context === 'copilot') {
+      key = `copilot/${timestamp}-${random}-${fileName}`
+    } else if (context === 'workspace') {
+      key = `workspace/${timestamp}-${random}-${fileName}`
+    } else {
+      key = `${timestamp}-${random}-${fileName}`
+    }
+
+    return Promise.resolve({
+      url: presignedUrl,
+      key,
+      uploadHeaders: uploadHeaders,
+    })
+  })
+
+  const generatePresignedDownloadUrlMock = vi.fn().mockResolvedValue(presignedUrl)
+
   vi.doMock('@/lib/uploads', () => ({
     getStorageProvider: vi.fn().mockReturnValue(provider),
     isUsingCloudStorage: vi.fn().mockReturnValue(isCloudEnabled),
-    uploadFile: vi.fn().mockResolvedValue({
-      path: '/api/files/serve/test-key.txt',
-      key: 'test-key.txt',
-      name: 'test.txt',
-      size: 100,
-      type: 'text/plain',
-    }),
-    downloadFile: vi.fn().mockResolvedValue(Buffer.from('test content')),
-    deleteFile: vi.fn().mockResolvedValue(undefined),
+    StorageService: {
+      uploadFile: uploadFileMock,
+      downloadFile: downloadFileMock,
+      deleteFile: deleteFileMock,
+      hasCloudStorage: hasCloudStorageMock,
+      generatePresignedUploadUrl: generatePresignedUploadUrlMock,
+      generatePresignedDownloadUrl: generatePresignedDownloadUrlMock,
+    },
+    uploadFile: uploadFileMock,
+    downloadFile: downloadFileMock,
+    deleteFile: deleteFileMock,
     getPresignedUrl: vi.fn().mockResolvedValue(presignedUrl),
+    hasCloudStorage: hasCloudStorageMock,
+    generatePresignedDownloadUrl: generatePresignedDownloadUrlMock,
+  }))
+
+  vi.doMock('@/lib/uploads/core/storage-service', () => ({
+    uploadFile: uploadFileMock,
+    downloadFile: downloadFileMock,
+    deleteFile: deleteFileMock,
+    hasCloudStorage: hasCloudStorageMock,
+    generatePresignedUploadUrl: generatePresignedUploadUrlMock,
+    generatePresignedDownloadUrl: generatePresignedDownloadUrlMock,
+    StorageService: {
+      uploadFile: uploadFileMock,
+      downloadFile: downloadFileMock,
+      deleteFile: deleteFileMock,
+      hasCloudStorage: hasCloudStorageMock,
+      generatePresignedUploadUrl: generatePresignedUploadUrlMock,
+      generatePresignedDownloadUrl: generatePresignedDownloadUrlMock,
+    },
+  }))
+
+  vi.doMock('@/lib/uploads/config', () => ({
+    USE_S3_STORAGE: provider === 's3',
+    USE_BLOB_STORAGE: provider === 'blob',
+    USE_LOCAL_STORAGE: provider === 'local',
+    getStorageProvider: vi.fn().mockReturnValue(provider),
+    S3_CONFIG: {
+      bucket: 'test-s3-bucket',
+      region: 'us-east-1',
+    },
+    S3_KB_CONFIG: {
+      bucket: 'test-s3-kb-bucket',
+      region: 'us-east-1',
+    },
+    S3_CHAT_CONFIG: {
+      bucket: 'test-s3-chat-bucket',
+      region: 'us-east-1',
+    },
+    BLOB_CONFIG: {
+      accountName: 'testaccount',
+      accountKey: 'testkey',
+      containerName: 'test-container',
+    },
+    BLOB_KB_CONFIG: {
+      accountName: 'testaccount',
+      accountKey: 'testkey',
+      containerName: 'test-kb-container',
+    },
+    BLOB_CHAT_CONFIG: {
+      accountName: 'testaccount',
+      accountKey: 'testkey',
+      containerName: 'test-chat-container',
+    },
   }))
 
   if (provider === 's3') {
-    vi.doMock('@/lib/uploads/s3/s3-client', () => ({
+    vi.doMock('@/lib/uploads/providers/s3/client', () => ({
       getS3Client: vi.fn().mockReturnValue({}),
-      sanitizeFilenameForMetadata: vi.fn((filename) => filename),
     }))
-
-    vi.doMock('@/lib/uploads/setup', () => ({
-      S3_CONFIG: {
-        bucket: 'test-s3-bucket',
-        region: 'us-east-1',
-      },
-      S3_KB_CONFIG: {
-        bucket: 'test-s3-kb-bucket',
-        region: 'us-east-1',
-      },
-      S3_CHAT_CONFIG: {
-        bucket: 'test-s3-chat-bucket',
-        region: 'us-east-1',
-      },
-      BLOB_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-container',
-      },
-      BLOB_KB_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-kb-container',
-      },
-      BLOB_CHAT_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-chat-container',
-      },
-    }))
-
     vi.doMock('@aws-sdk/client-s3', () => ({
       PutObjectCommand: vi.fn(),
     }))
@@ -919,29 +975,9 @@ export function createStorageProviderMocks(options: StorageProviderMockOptions =
       }),
     }
 
-    vi.doMock('@/lib/uploads/blob/blob-client', () => ({
+    vi.doMock('@/lib/uploads/providers/blob/client', () => ({
       getBlobServiceClient: vi.fn().mockReturnValue(mockBlobServiceClient),
-      sanitizeFilenameForMetadata: vi.fn((filename) => filename),
     }))
-
-    vi.doMock('@/lib/uploads/setup', () => ({
-      BLOB_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-container',
-      },
-      BLOB_KB_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-kb-container',
-      },
-      BLOB_CHAT_CONFIG: {
-        accountName: 'testaccount',
-        accountKey: 'testkey',
-        containerName: 'test-chat-container',
-      },
-    }))
-
     vi.doMock('@azure/storage-blob', () => ({
       BlobSASPermissions: {
         parse: vi.fn(() => 'w'),
@@ -1291,6 +1327,38 @@ export function setupFileApiMocks(
     authMocks.setUnauthenticated()
   }
 
+  vi.doMock('@/lib/auth/hybrid', () => ({
+    checkHybridAuth: vi.fn().mockResolvedValue({
+      success: authenticated,
+      userId: authenticated ? 'test-user-id' : undefined,
+      error: authenticated ? undefined : 'Unauthorized',
+    }),
+  }))
+
+  vi.doMock('@/app/api/files/authorization', () => ({
+    verifyFileAccess: vi.fn().mockResolvedValue(true),
+    verifyWorkspaceFileAccess: vi.fn().mockResolvedValue(true),
+    verifyKBFileAccess: vi.fn().mockResolvedValue(true),
+    verifyCopilotFileAccess: vi.fn().mockResolvedValue(true),
+    lookupWorkspaceFileByKey: vi.fn().mockResolvedValue({
+      workspaceId: 'test-workspace-id',
+      uploadedBy: 'test-user-id',
+    }),
+  }))
+
+  vi.doMock('@/lib/uploads/contexts/workspace', () => ({
+    uploadWorkspaceFile: vi.fn().mockResolvedValue({
+      id: 'test-file-id',
+      name: 'test.txt',
+      url: '/api/files/serve/workspace/test-workspace-id/test-file.txt',
+      size: 100,
+      type: 'text/plain',
+      key: 'workspace/test-workspace-id/1234567890-test.txt',
+      uploadedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }),
+  }))
+
   mockFileSystem({
     writeFileSuccess: true,
     readFileContent: 'test content',
@@ -1304,19 +1372,38 @@ export function setupFileApiMocks(
       isCloudEnabled: cloudEnabled,
     })
   } else {
+    const uploadFileMock = vi.fn().mockResolvedValue({
+      path: '/api/files/serve/test-key.txt',
+      key: 'test-key.txt',
+      name: 'test.txt',
+      size: 100,
+      type: 'text/plain',
+    })
+    const downloadFileMock = vi.fn().mockResolvedValue(Buffer.from('test content'))
+    const deleteFileMock = vi.fn().mockResolvedValue(undefined)
+    const hasCloudStorageMock = vi.fn().mockReturnValue(cloudEnabled)
+
     vi.doMock('@/lib/uploads', () => ({
       getStorageProvider: vi.fn().mockReturnValue('local'),
       isUsingCloudStorage: vi.fn().mockReturnValue(cloudEnabled),
-      uploadFile: vi.fn().mockResolvedValue({
-        path: '/api/files/serve/test-key.txt',
-        key: 'test-key.txt',
-        name: 'test.txt',
-        size: 100,
-        type: 'text/plain',
-      }),
-      downloadFile: vi.fn().mockResolvedValue(Buffer.from('test content')),
-      deleteFile: vi.fn().mockResolvedValue(undefined),
+      StorageService: {
+        uploadFile: uploadFileMock,
+        downloadFile: downloadFileMock,
+        deleteFile: deleteFileMock,
+        hasCloudStorage: hasCloudStorageMock,
+        generatePresignedUploadUrl: vi.fn().mockResolvedValue({
+          presignedUrl: 'https://example.com/presigned-url',
+          key: 'test-key.txt',
+        }),
+        generatePresignedDownloadUrl: vi
+          .fn()
+          .mockResolvedValue('https://example.com/presigned-url'),
+      },
+      uploadFile: uploadFileMock,
+      downloadFile: downloadFileMock,
+      deleteFile: deleteFileMock,
       getPresignedUrl: vi.fn().mockResolvedValue('https://example.com/presigned-url'),
+      hasCloudStorage: hasCloudStorageMock,
     }))
   }
 
@@ -1409,21 +1496,28 @@ export function mockUploadUtils(
     uploadError = false,
   } = options
 
+  const uploadFileMock = vi.fn().mockImplementation(() => {
+    if (uploadError) {
+      return Promise.reject(new Error('Upload failed'))
+    }
+    return Promise.resolve(uploadResult)
+  })
+
   vi.doMock('@/lib/uploads', () => ({
-    uploadFile: vi.fn().mockImplementation(() => {
-      if (uploadError) {
-        return Promise.reject(new Error('Upload failed'))
-      }
-      return Promise.resolve(uploadResult)
-    }),
+    StorageService: {
+      uploadFile: uploadFileMock,
+      downloadFile: vi.fn().mockResolvedValue(Buffer.from('test content')),
+      deleteFile: vi.fn().mockResolvedValue(undefined),
+      hasCloudStorage: vi.fn().mockReturnValue(isCloudStorage),
+    },
+    uploadFile: uploadFileMock,
     isUsingCloudStorage: vi.fn().mockReturnValue(isCloudStorage),
   }))
 
-  vi.doMock('@/lib/uploads/setup', () => ({
+  vi.doMock('@/lib/uploads/config', () => ({
     UPLOAD_DIR: '/test/uploads',
     USE_S3_STORAGE: isCloudStorage,
     USE_BLOB_STORAGE: false,
-    ensureUploadsDirectory: vi.fn().mockResolvedValue(true),
     S3_CONFIG: {
       bucket: 'test-bucket',
       region: 'test-region',

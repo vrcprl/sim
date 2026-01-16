@@ -11,17 +11,27 @@ import {
   type WorkspaceInvitationStatus,
   workspaceInvitation,
 } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
+import { getEmailSubject, renderInvitationEmail } from '@/components/emails'
 import { getSession } from '@/lib/auth'
 import { requireStripeClient } from '@/lib/billing/stripe-client'
-import { createLogger } from '@/lib/logs/console/logger'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { sendEmail } from '@/lib/messaging/email/mailer'
 
 const logger = createLogger('OrganizationInvitation')
 
+const updateInvitationSchema = z.object({
+  status: z.enum(['accepted', 'rejected', 'cancelled'], {
+    errorMap: () => ({ message: 'Invalid status. Must be "accepted", "rejected", or "cancelled"' }),
+  }),
+})
+
 // Get invitation details
 export async function GET(
-  _req: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string; invitationId: string }> }
 ) {
   const { id: organizationId, invitationId } = await params
@@ -62,6 +72,102 @@ export async function GET(
   }
 }
 
+// Resend invitation
+export async function POST(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string; invitationId: string }> }
+) {
+  const { id: organizationId, invitationId } = await params
+  const session = await getSession()
+
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    // Verify user is admin/owner
+    const memberEntry = await db
+      .select()
+      .from(member)
+      .where(and(eq(member.organizationId, organizationId), eq(member.userId, session.user.id)))
+      .limit(1)
+
+    if (memberEntry.length === 0 || !['owner', 'admin'].includes(memberEntry[0].role)) {
+      return NextResponse.json({ error: 'Forbidden - Admin access required' }, { status: 403 })
+    }
+
+    const orgInvitation = await db
+      .select()
+      .from(invitation)
+      .where(and(eq(invitation.id, invitationId), eq(invitation.organizationId, organizationId)))
+      .then((rows) => rows[0])
+
+    if (!orgInvitation) {
+      return NextResponse.json({ error: 'Invitation not found' }, { status: 404 })
+    }
+
+    if (orgInvitation.status !== 'pending') {
+      return NextResponse.json({ error: 'Can only resend pending invitations' }, { status: 400 })
+    }
+
+    const org = await db
+      .select({ name: organization.name })
+      .from(organization)
+      .where(eq(organization.id, organizationId))
+      .then((rows) => rows[0])
+
+    const inviter = await db
+      .select({ name: user.name })
+      .from(user)
+      .where(eq(user.id, session.user.id))
+      .limit(1)
+
+    // Update expiration date
+    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+    await db
+      .update(invitation)
+      .set({ expiresAt: newExpiresAt })
+      .where(eq(invitation.id, invitationId))
+
+    // Send email
+    const emailHtml = await renderInvitationEmail(
+      inviter[0]?.name || 'Someone',
+      org?.name || 'organization',
+      `${getBaseUrl()}/invite/${invitationId}`
+    )
+
+    const emailResult = await sendEmail({
+      to: orgInvitation.email,
+      subject: getEmailSubject('invitation'),
+      html: emailHtml,
+      emailType: 'transactional',
+    })
+
+    if (!emailResult.success) {
+      logger.error('Failed to resend invitation email', {
+        email: orgInvitation.email,
+        error: emailResult.message,
+      })
+      return NextResponse.json({ error: 'Failed to send invitation email' }, { status: 500 })
+    }
+
+    logger.info('Organization invitation resent', {
+      organizationId,
+      invitationId,
+      resentBy: session.user.id,
+      email: orgInvitation.email,
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Invitation resent successfully',
+    })
+  } catch (error) {
+    logger.error('Error resending organization invitation:', error)
+    return NextResponse.json({ error: 'Failed to resend invitation' }, { status: 500 })
+  }
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; invitationId: string }> }
@@ -84,14 +190,15 @@ export async function PUT(
   }
 
   try {
-    const { status } = await req.json()
+    const body = await req.json()
 
-    if (!status || !['accepted', 'rejected', 'cancelled'].includes(status)) {
-      return NextResponse.json(
-        { error: 'Invalid status. Must be "accepted", "rejected", or "cancelled"' },
-        { status: 400 }
-      )
+    const validation = updateInvitationSchema.safeParse(body)
+    if (!validation.success) {
+      const firstError = validation.error.errors[0]
+      return NextResponse.json({ error: firstError.message }, { status: 400 })
     }
+
+    const { status } = validation.data
 
     const orgInvitation = await db
       .select()
@@ -249,6 +356,7 @@ export async function PUT(
                   .set({
                     proPeriodCostSnapshot: currentProUsage,
                     currentPeriodCost: '0', // Reset so new usage is attributed to team
+                    currentPeriodCopilotCost: '0', // Reset copilot cost for new period
                   })
                   .where(eq(userStats.userId, userId))
 

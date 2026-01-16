@@ -1,12 +1,13 @@
 import { db } from '@sim/db'
-import { workflow, workspace } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
+import { workflow } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import { and, asc, eq, isNull, min } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { verifyWorkspaceMembership } from './utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getUserEntityPermissions, workspaceExists } from '@/lib/workspaces/permissions/utils'
+import { verifyWorkspaceMembership } from '@/app/api/workflows/utils'
 
 const logger = createLogger('WorkflowAPI')
 
@@ -16,6 +17,7 @@ const CreateWorkflowSchema = z.object({
   color: z.string().optional().default('#3972F6'),
   workspaceId: z.string().optional(),
   folderId: z.string().nullable().optional(),
+  sortOrder: z.number().int().optional(),
 })
 
 // GET /api/workflows - Get workflows for user (optionally filtered by workspaceId)
@@ -35,13 +37,9 @@ export async function GET(request: Request) {
     const userId = session.user.id
 
     if (workspaceId) {
-      const workspaceExists = await db
-        .select({ id: workspace.id })
-        .from(workspace)
-        .where(eq(workspace.id, workspaceId))
-        .then((rows) => rows.length > 0)
+      const wsExists = await workspaceExists(workspaceId)
 
-      if (!workspaceExists) {
+      if (!wsExists) {
         logger.warn(
           `[${requestId}] Attempt to fetch workflows for non-existent workspace: ${workspaceId}`
         )
@@ -66,10 +64,20 @@ export async function GET(request: Request) {
 
     let workflows
 
+    const orderByClause = [asc(workflow.sortOrder), asc(workflow.createdAt), asc(workflow.id)]
+
     if (workspaceId) {
-      workflows = await db.select().from(workflow).where(eq(workflow.workspaceId, workspaceId))
+      workflows = await db
+        .select()
+        .from(workflow)
+        .where(eq(workflow.workspaceId, workspaceId))
+        .orderBy(...orderByClause)
     } else {
-      workflows = await db.select().from(workflow).where(eq(workflow.userId, userId))
+      workflows = await db
+        .select()
+        .from(workflow)
+        .where(eq(workflow.userId, userId))
+        .orderBy(...orderByClause)
     }
 
     return NextResponse.json({ data: workflows }, { status: 200 })
@@ -92,24 +100,65 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json()
-    const { name, description, color, workspaceId, folderId } = CreateWorkflowSchema.parse(body)
+    const {
+      name,
+      description,
+      color,
+      workspaceId,
+      folderId,
+      sortOrder: providedSortOrder,
+    } = CreateWorkflowSchema.parse(body)
+
+    if (workspaceId) {
+      const workspacePermission = await getUserEntityPermissions(
+        session.user.id,
+        'workspace',
+        workspaceId
+      )
+
+      if (!workspacePermission || workspacePermission === 'read') {
+        logger.warn(
+          `[${requestId}] User ${session.user.id} attempted to create workflow in workspace ${workspaceId} without write permissions`
+        )
+        return NextResponse.json(
+          { error: 'Write or Admin access required to create workflows in this workspace' },
+          { status: 403 }
+        )
+      }
+    }
 
     const workflowId = crypto.randomUUID()
     const now = new Date()
 
     logger.info(`[${requestId}] Creating workflow ${workflowId} for user ${session.user.id}`)
 
-    // Track workflow creation
-    try {
-      const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-      trackPlatformEvent('platform.workflow.created', {
-        'workflow.id': workflowId,
-        'workflow.name': name,
-        'workflow.has_workspace': !!workspaceId,
-        'workflow.has_folder': !!folderId,
+    import('@/lib/core/telemetry')
+      .then(({ PlatformEvents }) => {
+        PlatformEvents.workflowCreated({
+          workflowId,
+          name,
+          workspaceId: workspaceId || undefined,
+          folderId: folderId || undefined,
+        })
       })
-    } catch (_e) {
-      // Silently fail
+      .catch(() => {
+        // Silently fail
+      })
+
+    let sortOrder: number
+    if (providedSortOrder !== undefined) {
+      sortOrder = providedSortOrder
+    } else {
+      const folderCondition = folderId ? eq(workflow.folderId, folderId) : isNull(workflow.folderId)
+      const [minResult] = await db
+        .select({ minOrder: min(workflow.sortOrder) })
+        .from(workflow)
+        .where(
+          workspaceId
+            ? and(eq(workflow.workspaceId, workspaceId), folderCondition)
+            : and(eq(workflow.userId, session.user.id), folderCondition)
+        )
+      sortOrder = (minResult?.minOrder ?? 1) - 1
     }
 
     await db.insert(workflow).values({
@@ -117,6 +166,7 @@ export async function POST(req: NextRequest) {
       userId: session.user.id,
       workspaceId: workspaceId || null,
       folderId: folderId || null,
+      sortOrder,
       name,
       description,
       color,
@@ -124,11 +174,8 @@ export async function POST(req: NextRequest) {
       createdAt: now,
       updatedAt: now,
       isDeployed: false,
-      collaborators: [],
       runCount: 0,
       variables: {},
-      isPublished: false,
-      marketplaceData: null,
     })
 
     logger.info(`[${requestId}] Successfully created empty workflow ${workflowId}`)
@@ -140,6 +187,7 @@ export async function POST(req: NextRequest) {
       color,
       workspaceId,
       folderId,
+      sortOrder,
       createdAt: now,
       updatedAt: now,
     })

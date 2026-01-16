@@ -10,8 +10,15 @@ export * from '@/lib/billing/core/subscription'
 export {
   getHighestPrioritySubscription as getActiveSubscription,
   getUserSubscriptionState as getSubscriptionState,
+  hasAccessControlAccess,
+  hasCredentialSetsAccess,
+  hasSSOAccess,
+  isEnterpriseOrgAdminOrOwner,
   isEnterprisePlan as hasEnterprisePlan,
+  isOrganizationOnEnterprisePlan,
+  isOrganizationOnTeamOrEnterprisePlan,
   isProPlan as hasProPlan,
+  isTeamOrgAdminOrOwner,
   isTeamPlan as hasTeamPlan,
   sendPlanWelcomeEmail,
 } from '@/lib/billing/core/subscription'
@@ -23,6 +30,8 @@ export {
   getUserUsageLimit as getUsageLimit,
   updateUserUsageLimit as updateUsageLimit,
 } from '@/lib/billing/core/usage'
+export * from '@/lib/billing/credits/balance'
+export * from '@/lib/billing/credits/purchase'
 export * from '@/lib/billing/subscriptions/utils'
 export { canEditUsageLimit as canEditLimit } from '@/lib/billing/subscriptions/utils'
 export * from '@/lib/billing/types'

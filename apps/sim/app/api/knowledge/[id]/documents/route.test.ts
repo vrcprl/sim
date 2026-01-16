@@ -67,12 +67,30 @@ describe('Knowledge Base Documents API Route', () => {
     chunkCount: 5,
     tokenCount: 100,
     characterCount: 500,
-    processingStatus: 'completed',
+    processingStatus: 'completed' as const,
     processingStartedAt: new Date(),
     processingCompletedAt: new Date(),
     processingError: null,
     enabled: true,
     uploadedAt: new Date(),
+    tag1: null,
+    tag2: null,
+    tag3: null,
+    tag4: null,
+    tag5: null,
+    tag6: null,
+    tag7: null,
+    number1: null,
+    number2: null,
+    number3: null,
+    number4: null,
+    number5: null,
+    date1: null,
+    date2: null,
+    boolean1: null,
+    boolean2: null,
+    boolean3: null,
+    deletedAt: null,
   }
 
   const resetMocks = () => {
@@ -343,7 +361,8 @@ describe('Knowledge Base Documents API Route', () => {
       expect(vi.mocked(createSingleDocument)).toHaveBeenCalledWith(
         validDocumentData,
         'kb-123',
-        expect.any(String)
+        expect.any(String),
+        'user-123'
       )
     })
 
@@ -451,7 +470,8 @@ describe('Knowledge Base Documents API Route', () => {
       expect(vi.mocked(createDocumentRecords)).toHaveBeenCalledWith(
         validBulkData.documents,
         'kb-123',
-        expect.any(String)
+        expect.any(String),
+        'user-123'
       )
       expect(vi.mocked(processDocumentsWithQueue)).toHaveBeenCalled()
     })
@@ -605,7 +625,7 @@ describe('Knowledge Base Documents API Route', () => {
       const data = await response.json()
 
       expect(response.status).toBe(500)
-      expect(data.error).toBe('Failed to create document')
+      expect(data.error).toBe('Database error')
     })
   })
 })

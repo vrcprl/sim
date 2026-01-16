@@ -4,10 +4,10 @@ import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
+import { inter } from '@/app/_styles/fonts/inter/inter'
+import { soehne } from '@/app/_styles/fonts/soehne/soehne'
 import { useVerification } from '@/app/(auth)/verify/use-verification'
-import { inter } from '@/app/fonts/inter'
-import { soehne } from '@/app/fonts/soehne/soehne'
 
 interface VerifyContentProps {
   hasEmailService: boolean
@@ -58,7 +58,7 @@ function VerificationForm({
     setCountdown(30)
   }
 
-  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
+  const [buttonClass, setButtonClass] = useState('branded-button-gradient')
 
   useEffect(() => {
     const checkCustomBrand = () => {
@@ -66,9 +66,9 @@ function VerificationForm({
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
       if (brandAccent && brandAccent !== '#6f3dfa') {
-        setButtonClass('auth-button-custom')
+        setButtonClass('branded-button-custom')
       } else {
-        setButtonClass('auth-button-gradient')
+        setButtonClass('branded-button-gradient')
       }
     }
 

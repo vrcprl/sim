@@ -41,7 +41,8 @@ export const zepGetContextTool: ToolConfig<any, ZepResponse> = {
       const queryParams = new URLSearchParams()
       const mode = params.mode || 'summary'
       queryParams.append('mode', mode)
-      if (params.minRating !== undefined) queryParams.append('minRating', String(params.minRating))
+      if (params.minRating !== undefined)
+        queryParams.append('minRating', String(Number(params.minRating)))
       return `https://api.getzep.com/api/v2/threads/${params.threadId}/context?${queryParams.toString()}`
     },
     method: 'GET',
@@ -52,21 +53,17 @@ export const zepGetContextTool: ToolConfig<any, ZepResponse> = {
   },
 
   transformResponse: async (response) => {
-    const text = await response.text()
-
     if (!response.ok) {
-      throw new Error(`Zep API error (${response.status}): ${text || response.statusText}`)
+      const error = await response.text()
+      throw new Error(`Zep API error (${response.status}): ${error || response.statusText}`)
     }
 
-    const data = JSON.parse(text.replace(/^\uFEFF/, '').trim())
+    const data = await response.json()
 
     return {
       success: true,
       output: {
-        context: data.context || data,
-        facts: data.facts || [],
-        entities: data.entities || [],
-        summary: data.summary,
+        context: data.context,
       },
     }
   },
@@ -74,19 +71,7 @@ export const zepGetContextTool: ToolConfig<any, ZepResponse> = {
   outputs: {
     context: {
       type: 'string',
-      description: 'The context string (summary or basic)',
-    },
-    facts: {
-      type: 'array',
-      description: 'Extracted facts',
-    },
-    entities: {
-      type: 'array',
-      description: 'Extracted entities',
-    },
-    summary: {
-      type: 'string',
-      description: 'Conversation summary',
+      description: 'The context string (summary or basic mode)',
     },
   },
 }

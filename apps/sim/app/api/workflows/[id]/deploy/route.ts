@@ -1,10 +1,15 @@
-import { apiKey, db, workflow, workflowDeploymentVersion } from '@sim/db'
-import { and, desc, eq, sql } from 'drizzle-orm'
-import { type NextRequest, NextResponse } from 'next/server'
-import { v4 as uuidv4 } from 'uuid'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { loadWorkflowFromNormalizedTables } from '@/lib/workflows/db-helpers'
+import { db, workflow, workflowDeploymentVersion } from '@sim/db'
+import { createLogger } from '@sim/logger'
+import { and, desc, eq } from 'drizzle-orm'
+import type { NextRequest } from 'next/server'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { removeMcpToolsForWorkflow, syncMcpToolsForWorkflow } from '@/lib/mcp/workflow-mcp-sync'
+import {
+  deployWorkflow,
+  loadWorkflowFromNormalizedTables,
+  undeployWorkflow,
+} from '@/lib/workflows/persistence/utils'
+import { createSchedulesForDeploy, validateWorkflowSchedules } from '@/lib/workflows/schedules'
 import { validateWorkflowPermissions } from '@/lib/workflows/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -39,35 +44,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       })
     }
 
-    let keyInfo: { name: string; type: 'personal' | 'workspace' } | null = null
-
-    if (workflowData.pinnedApiKeyId) {
-      const pinnedKey = await db
-        .select({ key: apiKey.key, name: apiKey.name, type: apiKey.type })
-        .from(apiKey)
-        .where(eq(apiKey.id, workflowData.pinnedApiKeyId))
-        .limit(1)
-
-      if (pinnedKey.length > 0) {
-        keyInfo = { name: pinnedKey[0].name, type: pinnedKey[0].type as 'personal' | 'workspace' }
-      }
-    } else {
-      const userApiKey = await db
-        .select({
-          key: apiKey.key,
-          name: apiKey.name,
-          type: apiKey.type,
-        })
-        .from(apiKey)
-        .where(and(eq(apiKey.userId, workflowData.userId), eq(apiKey.type, 'personal')))
-        .orderBy(desc(apiKey.lastUsed), desc(apiKey.createdAt))
-        .limit(1)
-
-      if (userApiKey.length > 0) {
-        keyInfo = { name: userApiKey[0].name, type: userApiKey[0].type as 'personal' | 'workspace' }
-      }
-    }
-
     let needsRedeployment = false
     const [active] = await db
       .select({ state: workflowDeploymentVersion.state })
@@ -82,23 +58,30 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .limit(1)
 
     if (active?.state) {
-      const { loadWorkflowFromNormalizedTables } = await import('@/lib/workflows/db-helpers')
+      const { loadWorkflowFromNormalizedTables } = await import('@/lib/workflows/persistence/utils')
       const normalizedData = await loadWorkflowFromNormalizedTables(id)
       if (normalizedData) {
+        const [workflowRecord] = await db
+          .select({ variables: workflow.variables })
+          .from(workflow)
+          .where(eq(workflow.id, id))
+          .limit(1)
+
         const currentState = {
           blocks: normalizedData.blocks,
           edges: normalizedData.edges,
           loops: normalizedData.loops,
           parallels: normalizedData.parallels,
+          variables: workflowRecord?.variables || {},
         }
-        const { hasWorkflowChanged } = await import('@/lib/workflows/utils')
+        const { hasWorkflowChanged } = await import('@/lib/workflows/comparison')
         needsRedeployment = hasWorkflowChanged(currentState as any, active.state as any)
       }
     }
 
     logger.info(`[${requestId}] Successfully retrieved deployment info: ${id}`)
 
-    const responseApiKeyInfo = keyInfo ? `${keyInfo.name} (${keyInfo.type})` : 'No API key found'
+    const responseApiKeyInfo = workflowData.workspaceId ? 'Workspace API keys' : 'Personal API keys'
 
     return createSuccessResponse({
       apiKey: responseApiKeyInfo,
@@ -128,222 +111,74 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return createErrorResponse(error.message, error.status)
     }
 
-    const userId = workflowData!.userId
-
-    let providedApiKey: string | null = null
-    try {
-      const parsed = await request.json()
-      if (parsed && typeof parsed.apiKey === 'string' && parsed.apiKey.trim().length > 0) {
-        providedApiKey = parsed.apiKey.trim()
-      }
-    } catch (_err) {}
-
-    logger.debug(`[${requestId}] Getting current workflow state for deployment`)
-
-    const normalizedData = await loadWorkflowFromNormalizedTables(id)
-
-    if (!normalizedData) {
-      logger.error(`[${requestId}] Failed to load workflow from normalized tables`)
-      return createErrorResponse('Failed to load workflow state', 500)
-    }
-
-    const currentState = {
-      blocks: normalizedData.blocks,
-      edges: normalizedData.edges,
-      loops: normalizedData.loops,
-      parallels: normalizedData.parallels,
-      lastSaved: Date.now(),
-    }
-
-    logger.debug(`[${requestId}] Current state retrieved from normalized tables:`, {
-      blocksCount: Object.keys(currentState.blocks).length,
-      edgesCount: currentState.edges.length,
-      loopsCount: Object.keys(currentState.loops).length,
-      parallelsCount: Object.keys(currentState.parallels).length,
-    })
-
-    if (!currentState || !currentState.blocks) {
-      logger.error(`[${requestId}] Invalid workflow state retrieved`, { currentState })
-      throw new Error('Invalid workflow state: missing blocks')
-    }
-
-    const deployedAt = new Date()
-    logger.debug(`[${requestId}] Proceeding with deployment at ${deployedAt.toISOString()}`)
-
-    let keyInfo: { name: string; type: 'personal' | 'workspace' } | null = null
-    let matchedKey: {
-      id: string
-      key: string
-      name: string
-      type: 'personal' | 'workspace'
-    } | null = null
-
-    // Use provided API key, or fall back to existing pinned API key for redeployment
-    const apiKeyToUse = providedApiKey || workflowData!.pinnedApiKeyId
-
-    if (!apiKeyToUse) {
-      return NextResponse.json(
-        { error: 'API key is required. Please create or select an API key before deploying.' },
-        { status: 400 }
-      )
-    }
-
-    let isValidKey = false
-
-    const currentUserId = session?.user?.id
-
-    if (currentUserId) {
-      const [personalKey] = await db
-        .select({
-          id: apiKey.id,
-          key: apiKey.key,
-          name: apiKey.name,
-          expiresAt: apiKey.expiresAt,
-        })
-        .from(apiKey)
-        .where(
-          and(
-            eq(apiKey.id, apiKeyToUse),
-            eq(apiKey.userId, currentUserId),
-            eq(apiKey.type, 'personal')
-          )
-        )
-        .limit(1)
-
-      if (personalKey) {
-        if (!personalKey.expiresAt || personalKey.expiresAt >= new Date()) {
-          matchedKey = { ...personalKey, type: 'personal' }
-          isValidKey = true
-          keyInfo = { name: personalKey.name, type: 'personal' }
-        }
-      }
-    }
-
-    if (!isValidKey) {
-      if (workflowData!.workspaceId) {
-        const [workspaceKey] = await db
-          .select({
-            id: apiKey.id,
-            key: apiKey.key,
-            name: apiKey.name,
-            expiresAt: apiKey.expiresAt,
-          })
-          .from(apiKey)
-          .where(
-            and(
-              eq(apiKey.id, apiKeyToUse),
-              eq(apiKey.workspaceId, workflowData!.workspaceId),
-              eq(apiKey.type, 'workspace')
-            )
-          )
-          .limit(1)
-
-        if (workspaceKey) {
-          if (!workspaceKey.expiresAt || workspaceKey.expiresAt >= new Date()) {
-            matchedKey = { ...workspaceKey, type: 'workspace' }
-            isValidKey = true
-            keyInfo = { name: workspaceKey.name, type: 'workspace' }
-          }
-        }
-      }
-    }
-
-    if (!isValidKey) {
-      logger.warn(`[${requestId}] Invalid API key ID provided for workflow deployment: ${id}`)
-      return createErrorResponse('Invalid API key provided', 400)
-    }
-
-    // Attribution: this route is UI-only; require session user as actor
     const actorUserId: string | null = session?.user?.id ?? null
     if (!actorUserId) {
       logger.warn(`[${requestId}] Unable to resolve actor user for workflow deployment: ${id}`)
       return createErrorResponse('Unable to determine deploying user', 400)
     }
 
-    await db.transaction(async (tx) => {
-      const [{ maxVersion }] = await tx
-        .select({ maxVersion: sql`COALESCE(MAX("version"), 0)` })
-        .from(workflowDeploymentVersion)
-        .where(eq(workflowDeploymentVersion.workflowId, id))
+    const normalizedData = await loadWorkflowFromNormalizedTables(id)
+    if (!normalizedData) {
+      return createErrorResponse('Failed to load workflow state', 500)
+    }
 
-      const nextVersion = Number(maxVersion) + 1
+    const scheduleValidation = validateWorkflowSchedules(normalizedData.blocks)
+    if (!scheduleValidation.isValid) {
+      logger.warn(
+        `[${requestId}] Schedule validation failed for workflow ${id}: ${scheduleValidation.error}`
+      )
+      return createErrorResponse(`Invalid schedule configuration: ${scheduleValidation.error}`, 400)
+    }
 
-      await tx
-        .update(workflowDeploymentVersion)
-        .set({ isActive: false })
-        .where(
-          and(
-            eq(workflowDeploymentVersion.workflowId, id),
-            eq(workflowDeploymentVersion.isActive, true)
-          )
-        )
-
-      await tx.insert(workflowDeploymentVersion).values({
-        id: uuidv4(),
-        workflowId: id,
-        version: nextVersion,
-        state: currentState,
-        isActive: true,
-        createdAt: deployedAt,
-        createdBy: actorUserId,
-      })
-
-      const updateData: Record<string, unknown> = {
-        isDeployed: true,
-        deployedAt,
-        deployedState: currentState,
-      }
-      if (providedApiKey && matchedKey) {
-        updateData.pinnedApiKeyId = matchedKey.id
-      }
-
-      await tx.update(workflow).set(updateData).where(eq(workflow.id, id))
+    const deployResult = await deployWorkflow({
+      workflowId: id,
+      deployedBy: actorUserId,
+      workflowName: workflowData!.name,
     })
 
-    if (matchedKey) {
-      try {
-        await db
-          .update(apiKey)
-          .set({ lastUsed: new Date(), updatedAt: new Date() })
-          .where(eq(apiKey.id, matchedKey.id))
-      } catch (e) {
-        logger.warn(`[${requestId}] Failed to update lastUsed for api key`)
+    if (!deployResult.success) {
+      return createErrorResponse(deployResult.error || 'Failed to deploy workflow', 500)
+    }
+
+    const deployedAt = deployResult.deployedAt!
+
+    let scheduleInfo: { scheduleId?: string; cronExpression?: string; nextRunAt?: Date } = {}
+    const scheduleResult = await createSchedulesForDeploy(id, normalizedData.blocks, db)
+    if (!scheduleResult.success) {
+      logger.error(
+        `[${requestId}] Failed to create schedule for workflow ${id}: ${scheduleResult.error}`
+      )
+    } else if (scheduleResult.scheduleId) {
+      scheduleInfo = {
+        scheduleId: scheduleResult.scheduleId,
+        cronExpression: scheduleResult.cronExpression,
+        nextRunAt: scheduleResult.nextRunAt,
       }
+      logger.info(
+        `[${requestId}] Schedule created for workflow ${id}: ${scheduleResult.scheduleId}`
+      )
     }
 
     logger.info(`[${requestId}] Workflow deployed successfully: ${id}`)
 
-    // Track workflow deployment
-    try {
-      const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
+    // Sync MCP tools with the latest parameter schema
+    await syncMcpToolsForWorkflow({ workflowId: id, requestId, context: 'deploy' })
 
-      // Aggregate block types to understand which blocks are being used
-      const blockTypeCounts: Record<string, number> = {}
-      for (const block of Object.values(currentState.blocks)) {
-        const blockType = (block as any).type || 'unknown'
-        blockTypeCounts[blockType] = (blockTypeCounts[blockType] || 0) + 1
-      }
-
-      trackPlatformEvent('platform.workflow.deployed', {
-        'workflow.id': id,
-        'workflow.name': workflowData!.name,
-        'workflow.blocks_count': Object.keys(currentState.blocks).length,
-        'workflow.edges_count': currentState.edges.length,
-        'workflow.has_loops': Object.keys(currentState.loops).length > 0,
-        'workflow.has_parallels': Object.keys(currentState.parallels).length > 0,
-        'workflow.api_key_type': keyInfo?.type || 'default',
-        'workflow.block_types': JSON.stringify(blockTypeCounts),
-      })
-    } catch (_e) {
-      // Silently fail
-    }
-
-    const responseApiKeyInfo = keyInfo ? `${keyInfo.name} (${keyInfo.type})` : 'Default key'
+    const responseApiKeyInfo = workflowData!.workspaceId
+      ? 'Workspace API keys'
+      : 'Personal API keys'
 
     return createSuccessResponse({
       apiKey: responseApiKeyInfo,
       isDeployed: true,
       deployedAt,
+      schedule: scheduleInfo.scheduleId
+        ? {
+            id: scheduleInfo.scheduleId,
+            cronExpression: scheduleInfo.cronExpression,
+            nextRunAt: scheduleInfo.nextRunAt,
+          }
+        : undefined,
     })
   } catch (error: any) {
     logger.error(`[${requestId}] Error deploying workflow: ${id}`, {
@@ -372,26 +207,18 @@ export async function DELETE(
       return createErrorResponse(error.message, error.status)
     }
 
-    await db.transaction(async (tx) => {
-      await tx
-        .update(workflowDeploymentVersion)
-        .set({ isActive: false })
-        .where(eq(workflowDeploymentVersion.workflowId, id))
+    const result = await undeployWorkflow({ workflowId: id })
+    if (!result.success) {
+      return createErrorResponse(result.error || 'Failed to undeploy workflow', 500)
+    }
 
-      await tx
-        .update(workflow)
-        .set({ isDeployed: false, deployedAt: null, deployedState: null, pinnedApiKeyId: null })
-        .where(eq(workflow.id, id))
-    })
+    await removeMcpToolsForWorkflow(id, requestId)
 
     logger.info(`[${requestId}] Workflow undeployed successfully: ${id}`)
 
-    // Track workflow undeployment
     try {
-      const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-      trackPlatformEvent('platform.workflow.undeployed', {
-        'workflow.id': id,
-      })
+      const { PlatformEvents } = await import('@/lib/core/telemetry')
+      PlatformEvents.workflowUndeployed({ workflowId: id })
     } catch (_e) {
       // Silently fail
     }

@@ -8,14 +8,17 @@ import {
   workspace,
   workspaceInvitation,
 } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
-import { WorkspaceInvitationEmail } from '@/components/emails/workspace-invitation'
+import { WorkspaceInvitationEmail } from '@/components/emails'
 import { getSession } from '@/lib/auth'
-import { sendEmail } from '@/lib/email/mailer'
-import { getFromEmailAddress } from '@/lib/email/utils'
-import { hasWorkspaceAdminAccess } from '@/lib/permissions/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { sendEmail } from '@/lib/messaging/email/mailer'
+import { getFromEmailAddress } from '@/lib/messaging/email/utils'
+import { hasWorkspaceAdminAccess } from '@/lib/workspaces/permissions/utils'
+
+const logger = createLogger('WorkspaceInvitationAPI')
 
 // GET /api/workspaces/invitations/[invitationId] - Get invitation details OR accept via token
 export async function GET(
@@ -28,7 +31,6 @@ export async function GET(
   const isAcceptFlow = !!token // If token is provided, this is an acceptance flow
 
   if (!session?.user?.id) {
-    // For token-based acceptance flows, redirect to login
     if (isAcceptFlow) {
       return NextResponse.redirect(new URL(`/invite/${invitationId}?token=${token}`, getBaseUrl()))
     }
@@ -48,8 +50,9 @@ export async function GET(
 
     if (!invitation) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitationId}?error=invalid-token`, getBaseUrl())
+          new URL(`/invite/${invitationId}?error=invalid-token${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Invitation not found or has expired' }, { status: 404 })
@@ -57,8 +60,9 @@ export async function GET(
 
     if (new Date() > new Date(invitation.expiresAt)) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=expired`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=expired${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Invitation has expired' }, { status: 400 })
@@ -72,17 +76,20 @@ export async function GET(
 
     if (!workspaceDetails) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=workspace-not-found`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=workspace-not-found${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
     }
 
     if (isAcceptFlow) {
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+
       if (invitation.status !== ('pending' as WorkspaceInvitationStatus)) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=already-processed`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=already-processed${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -97,7 +104,7 @@ export async function GET(
 
       if (!userData) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=user-not-found`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=user-not-found${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -105,7 +112,7 @@ export async function GET(
 
       if (!isValidMatch) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=email-mismatch`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=email-mismatch${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -163,14 +170,14 @@ export async function GET(
       workspaceName: workspaceDetails.name,
     })
   } catch (error) {
-    console.error('Error fetching workspace invitation:', error)
+    logger.error('Error fetching workspace invitation:', error)
     return NextResponse.json({ error: 'Failed to fetch invitation details' }, { status: 500 })
   }
 }
 
 // DELETE /api/workspaces/invitations/[invitationId] - Delete a workspace invitation
 export async function DELETE(
-  _req: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ invitationId: string }> }
 ) {
   const { invitationId } = await params
@@ -211,14 +218,14 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error deleting workspace invitation:', error)
+    logger.error('Error deleting workspace invitation:', error)
     return NextResponse.json({ error: 'Failed to delete invitation' }, { status: 500 })
   }
 }
 
 // POST /api/workspaces/invitations/[invitationId] - Resend a workspace invitation
 export async function POST(
-  _req: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ invitationId: string }> }
 ) {
   const { invitationId } = await params
@@ -295,7 +302,7 @@ export async function POST(
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Error resending workspace invitation:', error)
+    logger.error('Error resending workspace invitation:', error)
     return NextResponse.json({ error: 'Failed to resend invitation' }, { status: 500 })
   }
 }

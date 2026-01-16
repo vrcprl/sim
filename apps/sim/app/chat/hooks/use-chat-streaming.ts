@@ -1,11 +1,51 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
-import type { ChatMessage } from '@/app/chat/components/message/message'
+import { createLogger } from '@sim/logger'
+import { isUserFile } from '@/lib/core/utils/display-filters'
+import type { ChatFile, ChatMessage } from '@/app/chat/components/message/message'
 import { CHAT_ERROR_MESSAGES } from '@/app/chat/constants'
 
 const logger = createLogger('UseChatStreaming')
+
+function extractFilesFromData(
+  data: any,
+  files: ChatFile[] = [],
+  seenIds = new Set<string>()
+): ChatFile[] {
+  if (!data || typeof data !== 'object') {
+    return files
+  }
+
+  if (isUserFile(data)) {
+    if (!seenIds.has(data.id)) {
+      seenIds.add(data.id)
+      files.push({
+        id: data.id,
+        name: data.name,
+        url: data.url,
+        key: data.key,
+        size: data.size,
+        type: data.type,
+        context: data.context,
+      })
+    }
+    return files
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      extractFilesFromData(item, files, seenIds)
+    }
+    return files
+  }
+
+  for (const value of Object.values(data)) {
+    extractFilesFromData(value, files, seenIds)
+  }
+
+  return files
+}
 
 export interface VoiceSettings {
   isVoiceEnabled: boolean
@@ -21,6 +61,7 @@ export interface StreamingOptions {
   onAudioStart?: () => void
   onAudioEnd?: () => void
   audioStreamHandler?: (text: string) => Promise<void>
+  outputConfigs?: Array<{ blockId: string; path?: string }>
 }
 
 export function useChatStreaming() {
@@ -76,6 +117,7 @@ export function useChatStreaming() {
     userHasScrolled?: boolean,
     streamingOptions?: StreamingOptions
   ) => {
+    logger.info('[useChatStreaming] handleStreamedResponse called')
     // Set streaming state
     setIsStreamingResponse(true)
     abortControllerRef.current = new AbortController()
@@ -175,16 +217,146 @@ export function useChatStreaming() {
               }
 
               if (eventType === 'final' && json.data) {
+                const finalData = json.data as {
+                  success: boolean
+                  error?: string | { message?: string }
+                  output?: Record<string, Record<string, any>>
+                }
+
+                const outputConfigs = streamingOptions?.outputConfigs
+                const formattedOutputs: string[] = []
+                let extractedFiles: ChatFile[] = []
+
+                const formatValue = (value: any): string | null => {
+                  if (value === null || value === undefined) {
+                    return null
+                  }
+
+                  if (isUserFile(value)) {
+                    return null
+                  }
+
+                  if (Array.isArray(value) && value.length === 0) {
+                    return null
+                  }
+
+                  if (typeof value === 'string') {
+                    return value
+                  }
+
+                  if (typeof value === 'object') {
+                    try {
+                      return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``
+                    } catch {
+                      return String(value)
+                    }
+                  }
+
+                  return String(value)
+                }
+
+                const getOutputValue = (blockOutputs: Record<string, any>, path?: string) => {
+                  if (!path || path === 'content') {
+                    if (blockOutputs.content !== undefined) return blockOutputs.content
+                    if (blockOutputs.result !== undefined) return blockOutputs.result
+                    return blockOutputs
+                  }
+
+                  if (blockOutputs[path] !== undefined) {
+                    return blockOutputs[path]
+                  }
+
+                  if (path.includes('.')) {
+                    return path.split('.').reduce<any>((current, segment) => {
+                      if (current && typeof current === 'object' && segment in current) {
+                        return current[segment]
+                      }
+                      return undefined
+                    }, blockOutputs)
+                  }
+
+                  return undefined
+                }
+
+                if (outputConfigs?.length && finalData.output) {
+                  for (const config of outputConfigs) {
+                    const blockOutputs = finalData.output[config.blockId]
+                    if (!blockOutputs) continue
+
+                    const value = getOutputValue(blockOutputs, config.path)
+
+                    if (isUserFile(value)) {
+                      extractedFiles.push({
+                        id: value.id,
+                        name: value.name,
+                        url: value.url,
+                        key: value.key,
+                        size: value.size,
+                        type: value.type,
+                        context: value.context,
+                      })
+                      continue
+                    }
+
+                    const nestedFiles = extractFilesFromData(value)
+                    if (nestedFiles.length > 0) {
+                      extractedFiles = [...extractedFiles, ...nestedFiles]
+                      continue
+                    }
+
+                    const formatted = formatValue(value)
+                    if (formatted) {
+                      formattedOutputs.push(formatted)
+                    }
+                  }
+                }
+
+                let finalContent = accumulatedText
+
+                if (formattedOutputs.length > 0) {
+                  const nonEmptyOutputs = formattedOutputs.filter((output) => output.trim())
+                  if (nonEmptyOutputs.length > 0) {
+                    const combinedOutputs = nonEmptyOutputs.join('\n\n')
+                    finalContent = finalContent
+                      ? `${finalContent.trim()}\n\n${combinedOutputs}`
+                      : combinedOutputs
+                  }
+                }
+
+                if (!finalContent && extractedFiles.length === 0) {
+                  if (finalData.error) {
+                    if (typeof finalData.error === 'string') {
+                      finalContent = finalData.error
+                    } else if (typeof finalData.error?.message === 'string') {
+                      finalContent = finalData.error.message
+                    }
+                  } else if (finalData.success && finalData.output) {
+                    const fallbackOutput = Object.values(finalData.output)
+                      .map((block) => formatValue(block)?.trim())
+                      .filter(Boolean)[0]
+                    if (fallbackOutput) {
+                      finalContent = fallbackOutput
+                    }
+                  }
+                }
+
                 setMessages((prev) =>
                   prev.map((msg) =>
                     msg.id === messageId
                       ? {
                           ...msg,
                           isStreaming: false,
+                          content: finalContent ?? msg.content,
+                          files: extractedFiles.length > 0 ? extractedFiles : undefined,
                         }
                       : msg
                   )
                 )
+
+                accumulatedTextRef.current = ''
+                lastStreamedPositionRef.current = 0
+                lastDisplayedPositionRef.current = 0
+                audioStreamingActiveRef.current = false
 
                 return
               }
@@ -195,6 +367,13 @@ export function useChatStreaming() {
                 }
 
                 accumulatedText += contentChunk
+                logger.debug('[useChatStreaming] Received chunk', {
+                  blockId,
+                  chunkLength: contentChunk.length,
+                  totalLength: accumulatedText.length,
+                  messageId,
+                  chunk: contentChunk.substring(0, 20),
+                })
                 setMessages((prev) =>
                   prev.map((msg) =>
                     msg.id === messageId ? { ...msg, content: accumulatedText } : msg

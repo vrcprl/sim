@@ -1,10 +1,10 @@
+import { createLogger } from '@sim/logger'
 import { Check, Loader2, XCircle } from 'lucide-react'
 import {
   BaseClientTool,
   type BaseClientToolMetadata,
   ClientToolCallState,
 } from '@/lib/copilot/tools/client/base-tool'
-import { createLogger } from '@/lib/logs/console/logger'
 
 interface CheckoffTodoArgs {
   id?: string
@@ -22,7 +22,7 @@ export class CheckoffTodoClientTool extends BaseClientTool {
     displayNames: {
       [ClientToolCallState.generating]: { text: 'Marking todo', icon: Loader2 },
       [ClientToolCallState.executing]: { text: 'Marking todo', icon: Loader2 },
-      [ClientToolCallState.success]: { text: 'Todo marked complete', icon: Check },
+      [ClientToolCallState.success]: { text: 'Marked todo complete', icon: Check },
       [ClientToolCallState.error]: { text: 'Failed to mark todo', icon: XCircle },
     },
   }
@@ -40,7 +40,7 @@ export class CheckoffTodoClientTool extends BaseClientTool {
       }
 
       try {
-        const { useCopilotStore } = await import('@/stores/copilot/store')
+        const { useCopilotStore } = await import('@/stores/panel/copilot/store')
         const store = useCopilotStore.getState()
         if (store.updatePlanTodoStatus) {
           store.updatePlanTodoStatus(todoId, 'completed')

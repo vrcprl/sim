@@ -1,14 +1,30 @@
+import { createLogger } from '@sim/logger'
+import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { checkHybridAuth } from '@/lib/auth/hybrid'
 import { generateInternalToken } from '@/lib/auth/internal'
-import { isDev } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateProxyUrl } from '@/lib/security/input-validation'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { generateRequestId } from '@/lib/utils'
+import { isDev } from '@/lib/core/config/feature-flags'
+import { createPinnedUrl, validateUrlWithDNS } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getBaseUrl } from '@/lib/core/utils/urls'
 import { executeTool } from '@/tools'
 import { getTool, validateRequiredParametersAfterMerge } from '@/tools/utils'
 
 const logger = createLogger('ProxyAPI')
+
+const proxyPostSchema = z.object({
+  toolId: z.string().min(1, 'toolId is required'),
+  params: z.record(z.any()).optional().default({}),
+  executionContext: z
+    .object({
+      workflowId: z.string().optional(),
+      workspaceId: z.string().optional(),
+      executionId: z.string().optional(),
+      userId: z.string().optional(),
+    })
+    .optional(),
+})
 
 /**
  * Creates a minimal set of default headers for proxy requests
@@ -157,7 +173,7 @@ export async function GET(request: Request) {
     return createErrorResponse("Missing 'url' parameter", 400)
   }
 
-  const urlValidation = validateProxyUrl(targetUrl)
+  const urlValidation = await validateUrlWithDNS(targetUrl)
   if (!urlValidation.isValid) {
     logger.warn(`[${requestId}] Blocked proxy request`, {
       url: targetUrl.substring(0, 100),
@@ -195,11 +211,13 @@ export async function GET(request: Request) {
   logger.info(`[${requestId}] Proxying ${method} request to: ${targetUrl}`)
 
   try {
-    const response = await fetch(targetUrl, {
+    const pinnedUrl = createPinnedUrl(targetUrl, urlValidation.resolvedIP!)
+    const response = await fetch(pinnedUrl, {
       method: method,
       headers: {
         ...getProxyHeaders(),
         ...customHeaders,
+        Host: urlValidation.originalHostname!,
       },
       body: body || undefined,
     })
@@ -242,12 +260,18 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const requestId = generateRequestId()
   const startTime = new Date()
   const startTimeISO = startTime.toISOString()
 
   try {
+    const authResult = await checkHybridAuth(request, { requireWorkflowId: false })
+    if (!authResult.success) {
+      logger.error(`[${requestId}] Authentication failed for proxy:`, authResult.error)
+      return createErrorResponse('Unauthorized', 401)
+    }
+
     let requestBody
     try {
       requestBody = await request.json()
@@ -258,12 +282,18 @@ export async function POST(request: Request) {
       throw new Error('Invalid JSON in request body')
     }
 
-    const { toolId, params, executionContext } = requestBody
-
-    if (!toolId) {
-      logger.error(`[${requestId}] Missing toolId in request`)
-      throw new Error('Missing toolId in request')
+    const validationResult = proxyPostSchema.safeParse(requestBody)
+    if (!validationResult.success) {
+      logger.error(`[${requestId}] Request validation failed`, {
+        errors: validationResult.error.errors,
+      })
+      const errorMessages = validationResult.error.errors
+        .map((err) => `${err.path.join('.')}: ${err.message}`)
+        .join(', ')
+      throw new Error(`Validation failed: ${errorMessages}`)
     }
+
+    const { toolId, params } = validationResult.data
 
     logger.info(`[${requestId}] Processing tool: ${toolId}`)
 
@@ -303,7 +333,7 @@ export async function POST(request: Request) {
       params,
       true, // skipProxy (we're already in the proxy)
       !hasFileOutputs, // skipPostProcess (don't skip if tool has file outputs)
-      executionContext // pass execution context for file processing
+      undefined // execution context is not available in proxy context
     )
 
     if (!result.success) {
@@ -311,7 +341,6 @@ export async function POST(request: Request) {
         error: result.error || 'Unknown error',
       })
 
-      // Let the main executeTool handle error transformation to avoid double transformation
       throw new Error(result.error || 'Tool execution failed')
     }
 
@@ -319,10 +348,8 @@ export async function POST(request: Request) {
     const endTimeISO = endTime.toISOString()
     const duration = endTime.getTime() - startTime.getTime()
 
-    // Add explicit timing information directly to the response
     const responseWithTimingData = {
       ...result,
-      // Add timing data both at root level and in nested timing object
       startTime: startTimeISO,
       endTime: endTimeISO,
       duration,
@@ -335,7 +362,6 @@ export async function POST(request: Request) {
 
     logger.info(`[${requestId}] Tool executed successfully: ${toolId} (${duration}ms)`)
 
-    // Return the response with CORS headers
     return formatResponse(responseWithTimingData)
   } catch (error: any) {
     logger.error(`[${requestId}] Proxy request failed`, {
@@ -344,7 +370,6 @@ export async function POST(request: Request) {
       name: error instanceof Error ? error.name : undefined,
     })
 
-    // Add timing information even to error responses
     const endTime = new Date()
     const endTimeISO = endTime.toISOString()
     const duration = endTime.getTime() - startTime.getTime()

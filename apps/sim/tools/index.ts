@@ -1,9 +1,12 @@
+import { createLogger } from '@sim/logger'
 import { generateInternalToken } from '@/lib/auth/internal'
-import { createLogger } from '@/lib/logs/console/logger'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getBaseUrl } from '@/lib/core/utils/urls'
 import { parseMcpToolId } from '@/lib/mcp/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { generateRequestId } from '@/lib/utils'
+import { isCustomTool, isMcpTool } from '@/executor/constants'
 import type { ExecutionContext } from '@/executor/types'
+import type { ErrorInfo } from '@/tools/error-extractors'
+import { extractErrorMessage } from '@/tools/error-extractors'
 import type { OAuthTokenPayload, ToolConfig, ToolResponse } from '@/tools/types'
 import {
   formatRequestParams,
@@ -15,11 +18,110 @@ import {
 const logger = createLogger('Tools')
 
 /**
+ * Normalizes a tool ID by stripping resource ID suffix (UUID).
+ * Workflow tools: 'workflow_executor_<uuid>' -> 'workflow_executor'
+ * Knowledge tools: 'knowledge_search_<uuid>' -> 'knowledge_search'
+ */
+function normalizeToolId(toolId: string): string {
+  // Check for workflow_executor_<uuid> pattern
+  if (toolId.startsWith('workflow_executor_') && toolId.length > 'workflow_executor_'.length) {
+    return 'workflow_executor'
+  }
+  // Check for knowledge_<operation>_<uuid> pattern
+  const knowledgeOps = ['knowledge_search', 'knowledge_upload_chunk', 'knowledge_create_document']
+  for (const op of knowledgeOps) {
+    if (toolId.startsWith(`${op}_`) && toolId.length > op.length + 1) {
+      return op
+    }
+  }
+  return toolId
+}
+
+/**
+ * Maximum request body size in bytes before we warn/error about size limits.
+ * Next.js 16 has a default middleware/proxy body limit of 10MB.
+ */
+const MAX_REQUEST_BODY_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
+
+/**
+ * User-friendly error message for body size limit exceeded
+ */
+const BODY_SIZE_LIMIT_ERROR_MESSAGE =
+  'Request body size limit exceeded (10MB). The workflow data is too large to process. Try reducing the size of variables, inputs, or data being passed between blocks.'
+
+/**
+ * Validates request body size and throws a user-friendly error if exceeded
+ * @param body - The request body string to check
+ * @param requestId - Request ID for logging
+ * @param context - Context string for logging (e.g., toolId)
+ * @throws Error if body size exceeds the limit
+ */
+function validateRequestBodySize(
+  body: string | undefined,
+  requestId: string,
+  context: string
+): void {
+  if (!body) return
+
+  const bodySize = Buffer.byteLength(body, 'utf8')
+  if (bodySize > MAX_REQUEST_BODY_SIZE_BYTES) {
+    const bodySizeMB = (bodySize / (1024 * 1024)).toFixed(2)
+    const maxSizeMB = (MAX_REQUEST_BODY_SIZE_BYTES / (1024 * 1024)).toFixed(0)
+    logger.error(`[${requestId}] Request body size exceeds limit for ${context}:`, {
+      bodySize,
+      bodySizeMB: `${bodySizeMB}MB`,
+      maxSize: MAX_REQUEST_BODY_SIZE_BYTES,
+      maxSizeMB: `${maxSizeMB}MB`,
+    })
+    throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+  }
+}
+
+/**
+ * Checks if an error message indicates a body size limit issue
+ * @param errorMessage - The error message to check
+ * @returns true if the error is related to body size limits
+ */
+function isBodySizeLimitError(errorMessage: string): boolean {
+  const lowerMessage = errorMessage.toLowerCase()
+  return (
+    lowerMessage.includes('body size') ||
+    lowerMessage.includes('payload too large') ||
+    lowerMessage.includes('entity too large') ||
+    lowerMessage.includes('request entity too large') ||
+    lowerMessage.includes('body_not_allowed') ||
+    lowerMessage.includes('request body larger than')
+  )
+}
+
+/**
+ * Handles body size limit errors by logging and throwing a user-friendly error
+ * @param error - The original error
+ * @param requestId - Request ID for logging
+ * @param context - Context string for logging (e.g., toolId)
+ * @throws Error with user-friendly message if it's a size limit error
+ * @returns false if not a size limit error (caller should continue handling)
+ */
+function handleBodySizeLimitError(error: unknown, requestId: string, context: string): boolean {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+
+  if (isBodySizeLimitError(errorMessage)) {
+    logger.error(`[${requestId}] Request body size limit exceeded for ${context}:`, {
+      originalError: errorMessage,
+    })
+    throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+  }
+
+  return false
+}
+
+/**
  * System parameters that should be filtered out when extracting tool arguments
  * These are internal parameters used by the execution framework, not tool inputs
  */
 const MCP_SYSTEM_PARAMETERS = new Set([
   'serverId',
+  'serverUrl',
   'toolName',
   'serverName',
   '_context',
@@ -27,54 +129,15 @@ const MCP_SYSTEM_PARAMETERS = new Set([
   'workflowVariables',
   'blockData',
   'blockNameMapping',
+  '_toolSchema',
 ])
 
-// Extract a concise, meaningful error message from diverse API error shapes
-function getDeepApiErrorMessage(errorInfo?: {
-  status?: number
-  statusText?: string
-  data?: any
-}): string {
-  return (
-    // GraphQL errors (Linear API)
-    errorInfo?.data?.errors?.[0]?.message ||
-    // X/Twitter API specific pattern
-    errorInfo?.data?.errors?.[0]?.detail ||
-    // Generic details array
-    errorInfo?.data?.details?.[0]?.message ||
-    // Hunter API pattern
-    errorInfo?.data?.errors?.[0]?.details ||
-    // Direct errors array (when errors[0] is a string or simple object)
-    (Array.isArray(errorInfo?.data?.errors)
-      ? typeof errorInfo.data.errors[0] === 'string'
-        ? errorInfo.data.errors[0]
-        : errorInfo.data.errors[0]?.message
-      : undefined) ||
-    // Notion/Discord/GitHub/Twilio pattern
-    errorInfo?.data?.message ||
-    // SOAP/XML fault patterns
-    errorInfo?.data?.fault?.faultstring ||
-    errorInfo?.data?.faultstring ||
-    // Microsoft/OAuth error descriptions
-    errorInfo?.data?.error_description ||
-    // Airtable/Google fallback pattern
-    (typeof errorInfo?.data?.error === 'object'
-      ? errorInfo?.data?.error?.message || JSON.stringify(errorInfo?.data?.error)
-      : errorInfo?.data?.error) ||
-    // HTTP status text fallback
-    errorInfo?.statusText ||
-    // Final fallback
-    `Request failed with status ${errorInfo?.status || 'unknown'}`
-  )
-}
-
-// Create an Error instance from errorInfo and attach useful context
-function createTransformedErrorFromErrorInfo(errorInfo?: {
-  status?: number
-  statusText?: string
-  data?: any
-}): Error {
-  const message = getDeepApiErrorMessage(errorInfo)
+/**
+ * Create an Error instance from errorInfo and attach useful context
+ * Uses the error extractor registry to find the best error message
+ */
+function createTransformedErrorFromErrorInfo(errorInfo?: ErrorInfo, extractorId?: string): Error {
+  const message = extractErrorMessage(errorInfo, extractorId)
   const transformed = new Error(message)
   Object.assign(transformed, {
     status: errorInfo?.status,
@@ -145,20 +208,29 @@ export async function executeTool(
   try {
     let tool: ToolConfig | undefined
 
+    // Normalize tool ID to strip resource suffixes (e.g., workflow_executor_<uuid> -> workflow_executor)
+    const normalizedToolId = normalizeToolId(toolId)
+
     // If it's a custom tool, use the async version with workflowId
-    if (toolId.startsWith('custom_')) {
+    if (isCustomTool(normalizedToolId)) {
       const workflowId = params._context?.workflowId
-      tool = await getToolAsync(toolId, workflowId)
+      tool = await getToolAsync(normalizedToolId, workflowId)
       if (!tool) {
-        logger.error(`[${requestId}] Custom tool not found: ${toolId}`)
+        logger.error(`[${requestId}] Custom tool not found: ${normalizedToolId}`)
       }
-    } else if (toolId.startsWith('mcp-')) {
-      return await executeMcpTool(toolId, params, executionContext, requestId, startTimeISO)
+    } else if (isMcpTool(normalizedToolId)) {
+      return await executeMcpTool(
+        normalizedToolId,
+        params,
+        executionContext,
+        requestId,
+        startTimeISO
+      )
     } else {
       // For built-in tools, use the synchronous version
-      tool = getTool(toolId)
+      tool = getTool(normalizedToolId)
       if (!tool) {
-        logger.error(`[${requestId}] Built-in tool not found: ${toolId}`)
+        logger.error(`[${requestId}] Built-in tool not found: ${normalizedToolId}`)
       }
     }
 
@@ -181,9 +253,8 @@ export async function executeTool(
       try {
         const baseUrl = getBaseUrl()
 
-        // Prepare the token payload
         const tokenPayload: OAuthTokenPayload = {
-          credentialId: contextParams.credential,
+          credentialId: contextParams.credential as string,
         }
 
         // Add workflowId if it exists in params, context, or executionContext
@@ -231,10 +302,14 @@ export async function executeTool(
 
         const data = await response.json()
         contextParams.accessToken = data.accessToken
+        if (data.idToken) {
+          contextParams.idToken = data.idToken
+        }
+        if (data.instanceUrl) {
+          contextParams.instanceUrl = data.instanceUrl
+        }
 
-        logger.info(
-          `[${requestId}] Successfully got access token for ${toolId}, length: ${data.accessToken?.length || 0}`
-        )
+        logger.info(`[${requestId}] Successfully got access token for ${toolId}`)
 
         // Preserve credential for downstream transforms while removing it from request payload
         // so we don't leak it to external services.
@@ -255,6 +330,41 @@ export async function executeTool(
         throw new Error(
           `Failed to obtain credential for tool ${toolId}: ${error instanceof Error ? error.message : String(error)}`
         )
+      }
+    }
+
+    // Check for direct execution (no HTTP request needed)
+    if (tool.directExecution) {
+      logger.info(`[${requestId}] Using directExecution for ${toolId}`)
+      const result = await tool.directExecution(contextParams)
+
+      // Apply post-processing if available and not skipped
+      let finalResult = result
+      if (tool.postProcess && result.success && !skipPostProcess) {
+        try {
+          finalResult = await tool.postProcess(result, contextParams, executeTool)
+        } catch (error) {
+          logger.error(`[${requestId}] Post-processing error for ${toolId}:`, {
+            error: error instanceof Error ? error.message : String(error),
+          })
+          finalResult = result
+        }
+      }
+
+      // Process file outputs if execution context is available
+      finalResult = await processFileOutputs(finalResult, tool, executionContext)
+
+      // Add timing data to the result
+      const endTime = new Date()
+      const endTimeISO = endTime.toISOString()
+      const duration = endTime.getTime() - startTime.getTime()
+      return {
+        ...finalResult,
+        timing: {
+          startTime: startTimeISO,
+          endTime: endTimeISO,
+          duration,
+        },
       }
     }
 
@@ -447,6 +557,38 @@ function isErrorResponse(
 }
 
 /**
+ * Add internal authentication token to headers if running on server
+ * @param headers - Headers object to modify
+ * @param isInternalRoute - Whether the target URL is an internal route
+ * @param requestId - Request ID for logging
+ * @param context - Context string for logging (e.g., toolId or 'proxy')
+ */
+async function addInternalAuthIfNeeded(
+  headers: Headers | Record<string, string>,
+  isInternalRoute: boolean,
+  requestId: string,
+  context: string
+): Promise<void> {
+  if (typeof window === 'undefined') {
+    if (isInternalRoute) {
+      try {
+        const internalToken = await generateInternalToken()
+        if (headers instanceof Headers) {
+          headers.set('Authorization', `Bearer ${internalToken}`)
+        } else {
+          headers.Authorization = `Bearer ${internalToken}`
+        }
+        logger.info(`[${requestId}] Added internal auth token for ${context}`)
+      } catch (error) {
+        logger.error(`[${requestId}] Failed to generate internal token for ${context}:`, error)
+      }
+    } else {
+      logger.info(`[${requestId}] Skipping internal auth token for external URL: ${context}`)
+    }
+  }
+}
+
+/**
  * Handle an internal/direct tool request
  */
 async function handleInternalRequest(
@@ -456,23 +598,42 @@ async function handleInternalRequest(
 ): Promise<ToolResponse> {
   const requestId = generateRequestId()
 
-  // Format the request parameters
   const requestParams = formatRequestParams(tool, params)
 
   try {
     const baseUrl = getBaseUrl()
-    // Handle the case where url may be a function or string
     const endpointUrl =
       typeof tool.request.url === 'function' ? tool.request.url(params) : tool.request.url
 
-    const fullUrl = new URL(endpointUrl, baseUrl).toString()
+    const fullUrlObj = new URL(endpointUrl, baseUrl)
+    const isInternalRoute = endpointUrl.startsWith('/api/')
 
-    // For custom tools, validate parameters on the client side before sending
-    if (toolId.startsWith('custom_') && tool.request.body) {
+    if (isInternalRoute) {
+      const workflowId = params._context?.workflowId
+      if (workflowId) {
+        fullUrlObj.searchParams.set('workflowId', workflowId)
+      }
+    }
+
+    const fullUrl = fullUrlObj.toString()
+
+    if (isCustomTool(toolId) && tool.request.body) {
       const requestBody = tool.request.body(params)
-      if (requestBody.schema && requestBody.params) {
+      if (
+        typeof requestBody === 'object' &&
+        requestBody !== null &&
+        'schema' in requestBody &&
+        'params' in requestBody
+      ) {
         try {
-          validateClientSideParams(requestBody.params, requestBody.schema)
+          validateClientSideParams(
+            requestBody.params as Record<string, any>,
+            requestBody.schema as {
+              type: string
+              properties: Record<string, any>
+              required?: string[]
+            }
+          )
         } catch (validationError) {
           logger.error(`[${requestId}] Custom tool validation failed for ${toolId}:`, {
             error:
@@ -483,38 +644,60 @@ async function handleInternalRequest(
       }
     }
 
+    const headers = new Headers(requestParams.headers)
+    await addInternalAuthIfNeeded(headers, isInternalRoute, requestId, toolId)
+
+    // Check request body size before sending to detect potential size limit issues
+    validateRequestBodySize(requestParams.body, requestId, toolId)
+
     // Prepare request options
     const requestOptions = {
       method: requestParams.method,
-      headers: new Headers(requestParams.headers),
+      headers: headers,
       body: requestParams.body,
     }
 
     const response = await fetch(fullUrl, requestOptions)
 
-    // For non-OK responses, attempt JSON first; if parsing fails, preserve legacy error expected by tests
+    // For non-OK responses, attempt JSON first; if parsing fails, fall back to text
     if (!response.ok) {
+      // Check for 413 (Entity Too Large) - body size limit exceeded
+      if (response.status === 413) {
+        logger.error(`[${requestId}] Request body too large for ${toolId} (HTTP 413):`, {
+          status: response.status,
+          statusText: response.statusText,
+        })
+        throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+      }
+
       let errorData: any
       try {
         errorData = await response.json()
       } catch (jsonError) {
-        logger.error(`[${requestId}] JSON parse error for ${toolId}:`, {
-          error: jsonError instanceof Error ? jsonError.message : String(jsonError),
-        })
-        throw new Error(`Failed to parse response from ${toolId}: ${jsonError}`)
+        // JSON parsing failed, fall back to reading as text for error extraction
+        logger.warn(`[${requestId}] Response is not JSON for ${toolId}, reading as text`)
+        try {
+          errorData = await response.text()
+        } catch (textError) {
+          logger.error(`[${requestId}] Failed to read response body for ${toolId}`)
+          errorData = null
+        }
       }
 
-      const { isError, errorInfo } = isErrorResponse(response, errorData)
-      if (isError) {
-        const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo)
-
-        logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
-          status: errorInfo?.status,
-          errorData: errorInfo?.data,
-        })
-
-        throw errorToTransform
+      const errorInfo: ErrorInfo = {
+        status: response.status,
+        statusText: response.statusText,
+        data: errorData,
       }
+
+      const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
+
+      logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
+        status: errorInfo.status,
+        errorData: errorInfo.data,
+      })
+
+      throw errorToTransform
     }
 
     // Parse response data once with guard for empty 202 bodies
@@ -543,7 +726,7 @@ async function handleInternalRequest(
 
     if (isError) {
       // Handle error case
-      const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo)
+      const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
 
       logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
         status: errorInfo?.status,
@@ -565,6 +748,8 @@ async function handleInternalRequest(
           url: fullUrl,
           json: () => response.json(),
           text: () => response.text(),
+          arrayBuffer: () => response.arrayBuffer(),
+          blob: () => response.blob(),
         } as Response
 
         const data = await tool.transformResponse(mockResponse, params)
@@ -584,6 +769,9 @@ async function handleInternalRequest(
       error: undefined,
     }
   } catch (error: any) {
+    // Check if this is a body size limit error and throw user-friendly message
+    handleBodySizeLimitError(error, requestId, toolId)
+
     logger.error(`[${requestId}] Internal request error for ${toolId}:`, {
       error: error instanceof Error ? error.message : String(error),
     })
@@ -611,6 +799,7 @@ function validateClientSideParams(
   // Internal parameters that should be excluded from validation
   const internalParamSet = new Set([
     '_context',
+    '_toolSchema',
     'workflowId',
     'envVars',
     'workflowVariables',
@@ -673,13 +862,27 @@ async function handleProxyRequest(
   const proxyUrl = new URL('/api/proxy', baseUrl).toString()
 
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    await addInternalAuthIfNeeded(headers, true, requestId, `proxy:${toolId}`)
+
+    const body = JSON.stringify({ toolId, params, executionContext })
+
+    // Check request body size before sending
+    validateRequestBodySize(body, requestId, `proxy:${toolId}`)
+
     const response = await fetch(proxyUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toolId, params, executionContext }),
+      headers,
+      body,
     })
 
     if (!response.ok) {
+      // Check for 413 (Entity Too Large) - body size limit exceeded
+      if (response.status === 413) {
+        logger.error(`[${requestId}] Request body too large for proxy:${toolId} (HTTP 413)`)
+        throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+      }
+
       const errorText = await response.text()
       logger.error(`[${requestId}] Proxy request failed for ${toolId}:`, {
         status: response.status,
@@ -690,9 +893,7 @@ async function handleProxyRequest(
       let errorMessage = `HTTP error ${response.status}: ${response.statusText}`
 
       try {
-        // Try to parse as JSON for more details
         const errorJson = JSON.parse(errorText)
-        // Enhanced error extraction to match internal API patterns
         errorMessage =
           // Primary error patterns
           errorJson.errors?.[0]?.message ||
@@ -721,6 +922,9 @@ async function handleProxyRequest(
     const result = await response.json()
     return result
   } catch (error: any) {
+    // Check if this is a body size limit error and throw user-friendly message
+    handleBodySizeLimitError(error, requestId, `proxy:${toolId}`)
+
     logger.error(`[${requestId}] Proxy request error for ${toolId}:`, {
       error: error instanceof Error ? error.message : String(error),
     })
@@ -810,7 +1014,10 @@ async function executeMcpTool(
       }
     }
 
-    const requestBody = {
+    // Get tool schema if provided (from agent block's cached schema)
+    const toolSchema = params._toolSchema
+
+    const requestBody: Record<string, any> = {
       serverId,
       toolName,
       arguments: toolArguments,
@@ -818,15 +1025,26 @@ async function executeMcpTool(
       workspaceId, // Pass workspace context for scoping
     }
 
+    // Include schema to skip discovery on execution
+    if (toolSchema) {
+      requestBody.toolSchema = toolSchema
+    }
+
+    const body = JSON.stringify(requestBody)
+
+    // Check request body size before sending
+    validateRequestBodySize(body, actualRequestId, `mcp:${toolId}`)
+
     logger.info(`[${actualRequestId}] Making MCP tool request to ${toolName} on ${serverId}`, {
       hasWorkspaceId: !!workspaceId,
       hasWorkflowId: !!workflowId,
+      hasToolSchema: !!toolSchema,
     })
 
     const response = await fetch(`${baseUrl}/api/mcp/tools/execute`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(requestBody),
+      body,
     })
 
     const endTime = new Date()
@@ -834,6 +1052,21 @@ async function executeMcpTool(
     const duration = endTime.getTime() - new Date(actualStartTime).getTime()
 
     if (!response.ok) {
+      // Check for 413 (Entity Too Large) - body size limit exceeded
+      if (response.status === 413) {
+        logger.error(`[${actualRequestId}] Request body too large for mcp:${toolId} (HTTP 413)`)
+        return {
+          success: false,
+          output: {},
+          error: BODY_SIZE_LIMIT_ERROR_MESSAGE,
+          timing: {
+            startTime: actualStartTime,
+            endTime: endTimeISO,
+            duration,
+          },
+        }
+      }
+
       let errorMessage = `MCP tool execution failed: ${response.status} ${response.statusText}`
 
       try {
@@ -887,6 +1120,24 @@ async function executeMcpTool(
     const endTime = new Date()
     const endTimeISO = endTime.toISOString()
     const duration = endTime.getTime() - new Date(actualStartTime).getTime()
+
+    // Check if this is a body size limit error
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    if (isBodySizeLimitError(errorMsg)) {
+      logger.error(`[${actualRequestId}] Request body size limit exceeded for mcp:${toolId}:`, {
+        originalError: errorMsg,
+      })
+      return {
+        success: false,
+        output: {},
+        error: BODY_SIZE_LIMIT_ERROR_MESSAGE,
+        timing: {
+          startTime: actualStartTime,
+          endTime: endTimeISO,
+          duration,
+        },
+      }
+    }
 
     logger.error(`[${actualRequestId}] Error executing MCP tool ${toolId}:`, error)
 

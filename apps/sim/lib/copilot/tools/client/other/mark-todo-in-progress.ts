@@ -1,10 +1,10 @@
+import { createLogger } from '@sim/logger'
 import { Loader2, MinusCircle, XCircle } from 'lucide-react'
 import {
   BaseClientTool,
   type BaseClientToolMetadata,
   ClientToolCallState,
 } from '@/lib/copilot/tools/client/base-tool'
-import { createLogger } from '@/lib/logs/console/logger'
 
 interface MarkTodoInProgressArgs {
   id?: string
@@ -23,7 +23,7 @@ export class MarkTodoInProgressClientTool extends BaseClientTool {
       [ClientToolCallState.generating]: { text: 'Marking todo in progress', icon: Loader2 },
       [ClientToolCallState.pending]: { text: 'Marking todo in progress', icon: Loader2 },
       [ClientToolCallState.executing]: { text: 'Marking todo in progress', icon: Loader2 },
-      [ClientToolCallState.success]: { text: 'Todo marked in progress', icon: Loader2 },
+      [ClientToolCallState.success]: { text: 'Marked todo in progress', icon: Loader2 },
       [ClientToolCallState.error]: { text: 'Failed to mark in progress', icon: XCircle },
       [ClientToolCallState.aborted]: { text: 'Aborted marking in progress', icon: MinusCircle },
       [ClientToolCallState.rejected]: { text: 'Skipped marking in progress', icon: MinusCircle },
@@ -43,7 +43,7 @@ export class MarkTodoInProgressClientTool extends BaseClientTool {
       }
 
       try {
-        const { useCopilotStore } = await import('@/stores/copilot/store')
+        const { useCopilotStore } = await import('@/stores/panel/copilot/store')
         const store = useCopilotStore.getState()
         if (store.updatePlanTodoStatus) {
           store.updatePlanTodoStatus(todoId, 'executing')

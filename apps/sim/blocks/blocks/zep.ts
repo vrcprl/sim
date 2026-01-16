@@ -18,7 +18,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'operation',
       title: 'Operation',
       type: 'dropdown',
-      layout: 'half',
       options: [
         { label: 'Create Thread', id: 'create_thread' },
         { label: 'Add Messages', id: 'add_messages' },
@@ -37,7 +36,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'threadId',
       title: 'Thread ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter unique thread identifier',
       condition: {
         field: 'operation',
@@ -49,7 +47,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'userId',
       title: 'User ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter user identifier',
       condition: {
         field: 'operation',
@@ -61,7 +58,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'email',
       title: 'Email',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'user@example.com',
       condition: {
         field: 'operation',
@@ -72,7 +68,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'firstName',
       title: 'First Name',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'John',
       condition: {
         field: 'operation',
@@ -83,7 +78,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'lastName',
       title: 'Last Name',
       type: 'short-input',
-      layout: 'half',
       placeholder: 'Doe',
       condition: {
         field: 'operation',
@@ -94,7 +88,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'metadata',
       title: 'Metadata',
       type: 'code',
-      layout: 'full',
       placeholder: '{"key": "value"}',
       language: 'json',
       condition: {
@@ -106,7 +99,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'messages',
       title: 'Messages',
       type: 'code',
-      layout: 'full',
       placeholder: '[{"role": "user", "content": "Hello!"}]',
       language: 'json',
       condition: {
@@ -119,7 +111,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'mode',
       title: 'Context Mode',
       type: 'dropdown',
-      layout: 'half',
       options: [
         { label: 'Summary (Natural Language)', id: 'summary' },
         { label: 'Basic (Raw Facts)', id: 'basic' },
@@ -135,7 +126,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'apiKey',
       title: 'API Key',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter your Zep API key',
       password: true,
       required: true,
@@ -144,7 +134,6 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
       id: 'limit',
       title: 'Result Limit',
       type: 'slider',
-      layout: 'full',
       min: 1,
       max: 100,
       step: 1,
@@ -233,23 +222,14 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
         if (operation === 'add_messages') {
           if (!params.messages) {
             errors.push('Messages are required')
+          } else if (!Array.isArray(params.messages) || params.messages.length === 0) {
+            errors.push('Messages must be a non-empty array')
           } else {
-            try {
-              const messagesArray =
-                typeof params.messages === 'string' ? JSON.parse(params.messages) : params.messages
-
-              if (!Array.isArray(messagesArray) || messagesArray.length === 0) {
-                errors.push('Messages must be a non-empty array')
-              } else {
-                for (const msg of messagesArray) {
-                  if (!msg.role || !msg.content) {
-                    errors.push("Each message must have 'role' and 'content' properties")
-                    break
-                  }
-                }
+            for (const msg of params.messages) {
+              if (!msg.role || !msg.content) {
+                errors.push("Each message must have 'role' and 'content' properties")
+                break
               }
-            } catch (_e: any) {
-              errors.push('Messages must be valid JSON')
             }
           }
         }
@@ -274,16 +254,8 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
         if (params.metadata) result.metadata = params.metadata
 
         // Add messages for add operation
-        if (operation === 'add_messages') {
-          if (params.messages) {
-            try {
-              const messagesArray =
-                typeof params.messages === 'string' ? JSON.parse(params.messages) : params.messages
-              result.messages = messagesArray
-            } catch (e: any) {
-              throw new Error(`Zep Block Error: ${e.message || 'Messages must be valid JSON'}`)
-            }
-          }
+        if (operation === 'add_messages' && params.messages) {
+          result.messages = params.messages
         }
 
         return result
@@ -304,26 +276,26 @@ export const ZepBlock: BlockConfig<ZepResponse> = {
     metadata: { type: 'json', description: 'User metadata' },
   },
   outputs: {
+    // Thread operations
     threadId: { type: 'string', description: 'Thread identifier' },
-    userId: { type: 'string', description: 'User identifier' },
     uuid: { type: 'string', description: 'Internal UUID' },
     createdAt: { type: 'string', description: 'Creation timestamp' },
     updatedAt: { type: 'string', description: 'Update timestamp' },
     threads: { type: 'json', description: 'Array of threads' },
     deleted: { type: 'boolean', description: 'Deletion status' },
+    // Message operations
     messages: { type: 'json', description: 'Message data' },
-    messageIds: { type: 'json', description: 'Message identifiers' },
-    context: { type: 'string', description: 'User context string' },
-    facts: { type: 'json', description: 'Extracted facts' },
-    entities: { type: 'json', description: 'Extracted entities' },
-    summary: { type: 'string', description: 'Conversation summary' },
-    batchId: { type: 'string', description: 'Batch operation ID' },
+    messageIds: { type: 'json', description: 'Array of added message UUIDs' },
+    added: { type: 'boolean', description: 'Whether messages were added successfully' },
+    // Context operations
+    context: { type: 'string', description: 'User context string (summary or basic mode)' },
+    // User operations
+    userId: { type: 'string', description: 'User identifier' },
     email: { type: 'string', description: 'User email' },
     firstName: { type: 'string', description: 'User first name' },
     lastName: { type: 'string', description: 'User last name' },
     metadata: { type: 'json', description: 'User metadata' },
-    responseCount: { type: 'number', description: 'Number of items in response' },
-    totalCount: { type: 'number', description: 'Total number of items available' },
-    rowCount: { type: 'number', description: 'Number of rows in response' },
+    // Counts
+    totalCount: { type: 'number', description: 'Total number of items returned' },
   },
 }

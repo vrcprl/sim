@@ -10,6 +10,9 @@ export interface MistralParserInput {
   /** File upload data (from file-upload component) */
   fileUpload?: any
 
+  /** Internal file path flag (for presigned URL conversion) */
+  _internalFilePath?: string
+
   /** Mistral API key for authentication */
   apiKey: string
 
@@ -37,7 +40,7 @@ export interface MistralOcrUsageInfo {
   pagesProcessed: number
 
   /** Size of the document in bytes */
-  docSizeBytes: number
+  docSizeBytes: number | null
 }
 
 /**

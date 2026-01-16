@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { getBrandConfig } from '@/lib/branding/branding'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getBaseUrl } from '@/lib/core/utils/urls'
 
 /**
  * Generate dynamic metadata based on brand configuration
@@ -9,8 +9,8 @@ export function generateBrandedMetadata(override: Partial<Metadata> = {}): Metad
   const brand = getBrandConfig()
 
   const defaultTitle = brand.name
-  const summaryFull = `Sim is an open-source AI agent workflow builder. Developers at trail-blazing startups to Fortune 500 companies deploy agentic workflows on the Sim platform.  35,000+ developers are already using Sim to build and deploy AI agent workflows. Sim lets developers integrate with 100+ apps to streamline workflows with AI agents. Sim is SOC2 and HIPAA compliant, ensuring enterprise-level security.`
-  const summaryShort = `Sim is an open-source AI agent workflow builder.`
+  const summaryFull = `Sim is an open-source AI agent workflow builder. Developers at trail-blazing startups to Fortune 500 companies deploy agentic workflows on the Sim platform. 60,000+ developers already use Sim to build and deploy AI agent workflows and connect them to 100+ apps. Sim is SOC2 and HIPAA compliant, ensuring enterprise-grade security for AI automation.`
+  const summaryShort = `Sim is an open-source AI agent workflow builder for production workflows.`
 
   return {
     title: {
@@ -44,7 +44,7 @@ export function generateBrandedMetadata(override: Partial<Metadata> = {}): Metad
     alternates: {
       canonical: '/',
       languages: {
-        'en-US': '/en-US',
+        'en-US': '/',
       },
     },
     robots: {
@@ -67,9 +67,9 @@ export function generateBrandedMetadata(override: Partial<Metadata> = {}): Metad
       siteName: brand.name,
       images: [
         {
-          url: brand.logoUrl || '/social/facebook.png',
-          width: 1200,
-          height: 630,
+          url: brand.logoUrl || '/logo/426-240/primary/small.png',
+          width: 2130,
+          height: 1200,
           alt: brand.name,
         },
       ],
@@ -78,9 +78,9 @@ export function generateBrandedMetadata(override: Partial<Metadata> = {}): Metad
       card: 'summary_large_image',
       title: defaultTitle,
       description: summaryFull,
-      images: [brand.logoUrl || '/social/twitter.png'],
-      creator: '@simstudioai',
-      site: '@simstudioai',
+      images: [brand.logoUrl || '/logo/426-240/primary/small.png'],
+      creator: '@simdotai',
+      site: '@simdotai',
     },
     manifest: '/manifest.webmanifest',
     icons: {
@@ -130,10 +130,13 @@ export function generateStructuredData() {
     '@type': 'SoftwareApplication',
     name: 'Sim',
     description:
-      'Sim is an open-source AI agent workflow builder. Developers at trail-blazing startups to Fortune 500 companies deploy agentic workflows on the Sim platform.  30,000+ developers are already using Sim to build and deploy AI agent workflows. Sim lets developers integrate with 100+ apps to streamline workflows with AI agents. Sim is SOC2 and HIPAA compliant, ensuring enterprise-level security.',
-    url: 'https://sim.ai',
+      'Sim is an open-source AI agent workflow builder. Developers at trail-blazing startups to Fortune 500 companies deploy agentic workflows on the Sim platform. 60,000+ developers already use Sim to build and deploy AI agent workflows and connect them to 100+ apps. Sim is SOC2 and HIPAA compliant, ensuring enterprise-level security.',
+    url: getBaseUrl(),
     applicationCategory: 'BusinessApplication',
     operatingSystem: 'Web Browser',
+    applicationSubCategory: 'AIWorkflowAutomation',
+    areaServed: 'Worldwide',
+    availableLanguage: ['en'],
     offers: {
       '@type': 'Offer',
       category: 'SaaS',

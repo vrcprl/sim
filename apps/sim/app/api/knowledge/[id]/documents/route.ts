@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
@@ -11,7 +12,6 @@ import {
   processDocumentsWithQueue,
 } from '@/lib/knowledge/documents/service'
 import type { DocumentSortField, SortOrder } from '@/lib/knowledge/documents/types'
-import { createLogger } from '@/lib/logs/console/logger'
 import { getUserId } from '@/app/api/auth/oauth/utils'
 import { checkKnowledgeBaseAccess, checkKnowledgeBaseWriteAccess } from '@/app/api/knowledge/utils'
 
@@ -34,13 +34,24 @@ const CreateDocumentSchema = z.object({
   documentTagsData: z.string().optional(),
 })
 
+/**
+ * Schema for bulk document creation with processing options
+ *
+ * Processing options units:
+ * - chunkSize: tokens (1 token ≈ 4 characters)
+ * - minCharactersPerChunk: characters
+ * - chunkOverlap: characters
+ */
 const BulkCreateDocumentsSchema = z.object({
   documents: z.array(CreateDocumentSchema),
   processingOptions: z.object({
+    /** Maximum chunk size in tokens (1 token ≈ 4 characters) */
     chunkSize: z.number().min(100).max(4000),
+    /** Minimum chunk size in characters */
     minCharactersPerChunk: z.number().min(1).max(2000),
     recipe: z.string(),
     lang: z.string(),
+    /** Overlap between chunks in characters */
     chunkOverlap: z.number().min(0).max(500),
   }),
   bulk: z.literal(true),
@@ -179,22 +190,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const createdDocuments = await createDocumentRecords(
           validatedData.documents,
           knowledgeBaseId,
-          requestId
+          requestId,
+          userId
         )
 
         logger.info(
           `[${requestId}] Starting controlled async processing of ${createdDocuments.length} documents`
         )
 
-        // Track bulk document upload
         try {
-          const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-          trackPlatformEvent('platform.knowledge_base.documents_uploaded', {
-            'knowledge_base.id': knowledgeBaseId,
-            'documents.count': createdDocuments.length,
-            'documents.upload_type': 'bulk',
-            'processing.chunk_size': validatedData.processingOptions.chunkSize,
-            'processing.recipe': validatedData.processingOptions.recipe,
+          const { PlatformEvents } = await import('@/lib/core/telemetry')
+          PlatformEvents.knowledgeBaseDocumentsUploaded({
+            knowledgeBaseId,
+            documentsCount: createdDocuments.length,
+            uploadType: 'bulk',
+            chunkSize: validatedData.processingOptions.chunkSize,
+            recipe: validatedData.processingOptions.recipe,
           })
         } catch (_e) {
           // Silently fail
@@ -243,17 +254,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       try {
         const validatedData = CreateDocumentSchema.parse(body)
 
-        const newDocument = await createSingleDocument(validatedData, knowledgeBaseId, requestId)
+        const newDocument = await createSingleDocument(
+          validatedData,
+          knowledgeBaseId,
+          requestId,
+          userId
+        )
 
-        // Track single document upload
         try {
-          const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-          trackPlatformEvent('platform.knowledge_base.documents_uploaded', {
-            'knowledge_base.id': knowledgeBaseId,
-            'documents.count': 1,
-            'documents.upload_type': 'single',
-            'document.mime_type': validatedData.mimeType,
-            'document.file_size': validatedData.fileSize,
+          const { PlatformEvents } = await import('@/lib/core/telemetry')
+          PlatformEvents.knowledgeBaseDocumentsUploaded({
+            knowledgeBaseId,
+            documentsCount: 1,
+            uploadType: 'single',
+            mimeType: validatedData.mimeType,
+            fileSize: validatedData.fileSize,
           })
         } catch (_e) {
           // Silently fail
@@ -278,7 +293,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
   } catch (error) {
     logger.error(`[${requestId}] Error creating document`, error)
-    return NextResponse.json({ error: 'Failed to create document' }, { status: 500 })
+
+    // Check if it's a storage limit error
+    const errorMessage = error instanceof Error ? error.message : 'Failed to create document'
+    const isStorageLimitError =
+      errorMessage.includes('Storage limit exceeded') || errorMessage.includes('storage limit')
+
+    return NextResponse.json({ error: errorMessage }, { status: isStorageLimitError ? 413 : 500 })
   }
 }
 
@@ -317,7 +338,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           knowledgeBaseId,
           operation,
           documentIds,
-          requestId
+          requestId,
+          session.user.id
         )
 
         return NextResponse.json({

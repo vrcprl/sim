@@ -19,7 +19,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'operation',
       title: 'Operation',
       type: 'dropdown',
-      layout: 'full',
       options: [
         { label: 'Read Note', id: 'read_note' },
         { label: 'Write Note', id: 'write_note' },
@@ -34,8 +33,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'credential',
       title: 'Wealthbox Account',
       type: 'oauth-input',
-      layout: 'full',
-      provider: 'wealthbox',
       serviceId: 'wealthbox',
       requiredScopes: ['login', 'data'],
       placeholder: 'Select Wealthbox account',
@@ -45,7 +42,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'noteId',
       title: 'Note ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Note ID (optional)',
       condition: { field: 'operation', value: ['read_note'] },
     },
@@ -53,10 +49,8 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'contactId',
       title: 'Select Contact',
       type: 'file-selector',
-      provider: 'wealthbox',
       serviceId: 'wealthbox',
       requiredScopes: ['login', 'data'],
-      layout: 'full',
       placeholder: 'Enter Contact ID',
       mode: 'basic',
       canonicalParamId: 'contactId',
@@ -66,7 +60,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'manualContactId',
       title: 'Contact ID',
       type: 'short-input',
-      layout: 'full',
       canonicalParamId: 'contactId',
       placeholder: 'Enter Contact ID',
       mode: 'advanced',
@@ -76,27 +69,13 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'taskId',
       title: 'Task ID',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Task ID',
-      mode: 'basic',
-      canonicalParamId: 'taskId',
-      condition: { field: 'operation', value: ['read_task'] },
-    },
-    {
-      id: 'manualTaskId',
-      title: 'Task ID',
-      type: 'short-input',
-      layout: 'full',
-      canonicalParamId: 'taskId',
-      placeholder: 'Enter Task ID',
-      mode: 'advanced',
       condition: { field: 'operation', value: ['read_task'] },
     },
     {
       id: 'title',
       title: 'Title',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Title',
       condition: { field: 'operation', value: ['write_task'] },
       required: true,
@@ -105,16 +84,27 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'dueDate',
       title: 'Due Date',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter due date (e.g., 2015-05-24 11:00 AM -0400)',
       condition: { field: 'operation', value: ['write_task'] },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date/time string based on the user's description.
+The format should be: YYYY-MM-DD HH:MM AM/PM ZZZZ (e.g., 2015-05-24 11:00 AM -0400).
+Examples:
+- "tomorrow at 2pm" -> Calculate tomorrow's date at 02:00 PM with local timezone offset
+- "next Monday at 9am" -> Calculate next Monday at 09:00 AM with local timezone offset
+- "in 3 days at noon" -> Calculate 3 days from now at 12:00 PM with local timezone offset
+
+Return ONLY the date/time string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "tomorrow at 2pm", "next Friday morning")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'firstName',
       title: 'First Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter First Name',
       condition: { field: 'operation', value: ['write_contact'] },
       required: true,
@@ -123,7 +113,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'lastName',
       title: 'Last Name',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Last Name',
       condition: { field: 'operation', value: ['write_contact'] },
       required: true,
@@ -132,7 +121,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'emailAddress',
       title: 'Email Address',
       type: 'short-input',
-      layout: 'full',
       placeholder: 'Enter Email Address',
       condition: { field: 'operation', value: ['write_contact'] },
     },
@@ -140,7 +128,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'content',
       title: 'Content',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Enter Content',
       condition: { field: 'operation', value: ['write_note', 'write_event', 'write_task'] },
       required: true,
@@ -149,7 +136,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'backgroundInformation',
       title: 'Background Information',
       type: 'long-input',
-      layout: 'full',
       placeholder: 'Enter Background Information',
       condition: { field: 'operation', value: ['write_contact'] },
     },
@@ -183,12 +169,9 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
         }
       },
       params: (params) => {
-        const { credential, operation, contactId, manualContactId, taskId, manualTaskId, ...rest } =
-          params
+        const { credential, operation, contactId, manualContactId, taskId, ...rest } = params
 
-        // Handle both selector and manual inputs
         const effectiveContactId = (contactId || manualContactId || '').trim()
-        const effectiveTaskId = (taskId || manualTaskId || '').trim()
 
         const baseParams = {
           ...rest,
@@ -241,7 +224,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
     contactId: { type: 'string', description: 'Contact identifier' },
     manualContactId: { type: 'string', description: 'Manual contact identifier' },
     taskId: { type: 'string', description: 'Task identifier' },
-    manualTaskId: { type: 'string', description: 'Manual task identifier' },
     content: { type: 'string', description: 'Content text' },
     firstName: { type: 'string', description: 'First name' },
     lastName: { type: 'string', description: 'Last name' },
@@ -268,7 +250,7 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
     tasks: { type: 'json', description: 'Array of task objects from bulk read operations' },
     metadata: {
       type: 'json',
-      description: 'Operation metadata including item IDs, types, and operation details',
+      description: 'Operation metadata with itemId, noteId, contactId, taskId, itemType',
     },
     success: {
       type: 'boolean',

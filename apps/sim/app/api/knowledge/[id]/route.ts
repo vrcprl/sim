@@ -1,17 +1,26 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
+import { PlatformEvents } from '@/lib/core/telemetry'
+import { generateRequestId } from '@/lib/core/utils/request'
 import {
   deleteKnowledgeBase,
   getKnowledgeBaseById,
   updateKnowledgeBase,
 } from '@/lib/knowledge/service'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
 import { checkKnowledgeBaseAccess, checkKnowledgeBaseWriteAccess } from '@/app/api/knowledge/utils'
 
 const logger = createLogger('KnowledgeBaseByIdAPI')
 
+/**
+ * Schema for updating a knowledge base
+ *
+ * Chunking config units:
+ * - maxSize: tokens (1 token ≈ 4 characters)
+ * - minSize: characters
+ * - overlap: tokens (1 token ≈ 4 characters)
+ */
 const UpdateKnowledgeBaseSchema = z.object({
   name: z.string().min(1, 'Name is required').optional(),
   description: z.string().optional(),
@@ -20,14 +29,27 @@ const UpdateKnowledgeBaseSchema = z.object({
   workspaceId: z.string().nullable().optional(),
   chunkingConfig: z
     .object({
-      maxSize: z.number(),
-      minSize: z.number(),
-      overlap: z.number(),
+      /** Maximum chunk size in tokens (1 token ≈ 4 characters) */
+      maxSize: z.number().min(100).max(4000),
+      /** Minimum chunk size in characters */
+      minSize: z.number().min(1).max(2000),
+      /** Overlap between chunks in characters */
+      overlap: z.number().min(0).max(500),
     })
+    .refine(
+      (data) => {
+        // Convert maxSize from tokens to characters for comparison (1 token ≈ 4 chars)
+        const maxSizeInChars = data.maxSize * 4
+        return data.minSize < maxSizeInChars
+      },
+      {
+        message: 'Min chunk size (characters) must be less than max chunk size (tokens × 4)',
+      }
+    )
     .optional(),
 })
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const requestId = generateRequestId()
   const { id } = await params
 
@@ -133,7 +155,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const requestId = generateRequestId()
   const { id } = await params
 
@@ -158,6 +183,14 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     }
 
     await deleteKnowledgeBase(id, requestId)
+
+    try {
+      PlatformEvents.knowledgeBaseDeleted({
+        knowledgeBaseId: id,
+      })
+    } catch {
+      // Telemetry should not fail the operation
+    }
 
     logger.info(`[${requestId}] Knowledge base deleted: ${id} for user ${session.user.id}`)
 

@@ -8,22 +8,6 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 <BlockInfoCard 
   type="google_docs"
   color="#E0E0E0"
-  icon={true}
-  iconSvg={`<svg className="block-icon"
-      
-      xmlns='http://www.w3.org/2000/svg'
-      viewBox='0 0 48 48'
-      
-      
-    >
-      <path
-        fill='#2196f3'
-        d='M37,45H11c-1.657,0-3-1.343-3-3V6c0-1.657,1.343-3,3-3h19l10,10v29C40,43.657,38.657,45,37,45z'
-      />
-      <path fill='#bbdefb' d='M40 13L30 13 30 3z' />
-      <path fill='#1565c0' d='M30 13L40 23 40 13z' />
-      <path fill='#e3f2fd' d='M15 23H33V25H15zM15 27H33V29H15zM15 31H33V33H15zM15 35H25V37H15z' />
-    </svg>`}
 />
 
 {/* MANUAL-CONTENT-START:intro */}
@@ -103,6 +87,10 @@ Read content from a Google Docs document
 | --------- | ---- | ----------- |
 | `content` | string | Extracted document text content |
 | `metadata` | json | Document metadata including ID, title, and URL |
+| ↳ `documentId` | string | Google Docs document ID |
+| ↳ `title` | string | Document title |
+| ↳ `mimeType` | string | Document MIME type |
+| ↳ `url` | string | Document URL |
 
 ### `google_docs_write`
 
@@ -121,6 +109,10 @@ Write or update content in a Google Docs document
 | --------- | ---- | ----------- |
 | `updatedContent` | boolean | Indicates if document content was updated successfully |
 | `metadata` | json | Updated document metadata including ID, title, and URL |
+| ↳ `documentId` | string | Google Docs document ID |
+| ↳ `title` | string | Document title |
+| ↳ `mimeType` | string | Document MIME type |
+| ↳ `url` | string | Document URL |
 
 ### `google_docs_create`
 
@@ -140,10 +132,9 @@ Create a new Google Docs document
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
 | `metadata` | json | Created document metadata including ID, title, and URL |
+| ↳ `documentId` | string | Google Docs document ID |
+| ↳ `title` | string | Document title |
+| ↳ `mimeType` | string | Document MIME type |
+| ↳ `url` | string | Document URL |
 
 
-
-## Notes
-
-- Category: `tools`
-- Type: `google_docs`

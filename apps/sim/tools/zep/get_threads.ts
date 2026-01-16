@@ -47,8 +47,8 @@ export const zepGetThreadsTool: ToolConfig<any, ZepResponse> = {
   request: {
     url: (params) => {
       const queryParams = new URLSearchParams()
-      queryParams.append('page_size', String(params.pageSize || 10))
-      queryParams.append('page_number', String(params.pageNumber || 1))
+      queryParams.append('page_size', String(Number(params.pageSize || 10)))
+      queryParams.append('page_number', String(Number(params.pageNumber || 1)))
       if (params.orderBy) queryParams.append('order_by', params.orderBy)
       if (params.asc !== undefined) queryParams.append('asc', String(params.asc))
       return `https://api.getzep.com/api/v2/threads?${queryParams.toString()}`
@@ -61,13 +61,12 @@ export const zepGetThreadsTool: ToolConfig<any, ZepResponse> = {
   },
 
   transformResponse: async (response) => {
-    const text = await response.text()
-
     if (!response.ok) {
-      throw new Error(`Zep API error (${response.status}): ${text || response.statusText}`)
+      const error = await response.text()
+      throw new Error(`Zep API error (${response.status}): ${error || response.statusText}`)
     }
 
-    const data = JSON.parse(text.replace(/^\uFEFF/, '').trim())
+    const data = await response.json()
 
     return {
       success: true,

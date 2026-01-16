@@ -1,16 +1,9 @@
+import { loggerMock, setupGlobalFetchMock } from '@sim/testing'
 import { vi } from 'vitest'
 
 // Mock common dependencies used across executor handler tests
 
-// Logger
-vi.mock('@/lib/logs/console/logger', () => ({
-  createLogger: vi.fn(() => ({
-    info: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-  })),
-}))
+vi.mock('@sim/logger', () => loggerMock)
 
 // Blocks
 vi.mock('@/blocks/index', () => ({
@@ -31,8 +24,11 @@ vi.mock('@/tools/utils', () => ({
 }))
 
 // Utils
-vi.mock('@/lib/utils', () => ({
-  isHosted: vi.fn().mockReturnValue(false),
+vi.mock('@/lib/core/config/environment', () => ({
+  isHosted: false,
+}))
+
+vi.mock('@/lib/core/config/api-keys', () => ({
   getRotatingApiKey: vi.fn(),
 }))
 
@@ -68,7 +64,7 @@ vi.mock('@/blocks/blocks/router')
 vi.mock('@/blocks')
 
 // Mock fetch for server requests
-global.fetch = Object.assign(vi.fn(), { preconnect: vi.fn() }) as typeof fetch
+setupGlobalFetchMock()
 
 // Mock process.env
 process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000'

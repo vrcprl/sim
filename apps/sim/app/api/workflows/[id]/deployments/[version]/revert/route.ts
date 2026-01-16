@@ -1,10 +1,11 @@
 import { db, workflow, workflowDeploymentVersion } from '@sim/db'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { saveWorkflowToNormalizedTables } from '@/lib/workflows/db-helpers'
+import { env } from '@/lib/core/config/env'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { syncMcpToolsForWorkflow } from '@/lib/mcp/workflow-mcp-sync'
+import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
 import { validateWorkflowPermissions } from '@/lib/workflows/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -73,8 +74,6 @@ export async function POST(
       loops: deployedState.loops || {},
       parallels: deployedState.parallels || {},
       lastSaved: Date.now(),
-      isDeployed: true,
-      deployedAt: new Date(),
       deploymentStatuses: deployedState.deploymentStatuses || {},
     })
 
@@ -86,6 +85,13 @@ export async function POST(
       .update(workflow)
       .set({ lastSynced: new Date(), updatedAt: new Date() })
       .where(eq(workflow.id, id))
+
+    await syncMcpToolsForWorkflow({
+      workflowId: id,
+      requestId,
+      state: deployedState,
+      context: 'revert',
+    })
 
     try {
       const socketServerUrl = env.SOCKET_SERVER_URL || 'http://localhost:3002'

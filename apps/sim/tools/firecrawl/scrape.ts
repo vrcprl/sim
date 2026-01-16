@@ -31,15 +31,44 @@ export const scrapeTool: ToolConfig<ScrapeParams, ScrapeResponse> = {
 
   request: {
     method: 'POST',
-    url: 'https://api.firecrawl.dev/v1/scrape',
+    url: 'https://api.firecrawl.dev/v2/scrape',
     headers: (params) => ({
       'Content-Type': 'application/json',
       Authorization: `Bearer ${params.apiKey}`,
     }),
-    body: (params) => ({
-      url: params.url,
-      formats: params.scrapeOptions?.formats || ['markdown'],
-    }),
+    body: (params) => {
+      const body: Record<string, any> = {
+        url: params.url,
+        formats: params.formats || params.scrapeOptions?.formats || ['markdown'],
+      }
+
+      if (typeof params.onlyMainContent === 'boolean') body.onlyMainContent = params.onlyMainContent
+      if (params.includeTags) body.includeTags = params.includeTags
+      if (params.excludeTags) body.excludeTags = params.excludeTags
+      if (params.maxAge) body.maxAge = Number(params.maxAge)
+      if (params.headers) body.headers = params.headers
+      if (params.waitFor) body.waitFor = Number(params.waitFor)
+      if (typeof params.mobile === 'boolean') body.mobile = params.mobile
+      if (typeof params.skipTlsVerification === 'boolean')
+        body.skipTlsVerification = params.skipTlsVerification
+      if (params.timeout) body.timeout = Number(params.timeout)
+      if (params.parsers) body.parsers = params.parsers
+      if (params.actions) body.actions = params.actions
+      if (params.location) body.location = params.location
+      if (typeof params.removeBase64Images === 'boolean')
+        body.removeBase64Images = params.removeBase64Images
+      if (typeof params.blockAds === 'boolean') body.blockAds = params.blockAds
+      if (params.proxy) body.proxy = params.proxy
+      if (typeof params.storeInCache === 'boolean') body.storeInCache = params.storeInCache
+      if (typeof params.zeroDataRetention === 'boolean')
+        body.zeroDataRetention = params.zeroDataRetention
+
+      if (params.scrapeOptions) {
+        Object.assign(body, params.scrapeOptions)
+      }
+
+      return body
+    },
   },
 
   transformResponse: async (response: Response) => {

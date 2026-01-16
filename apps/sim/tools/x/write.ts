@@ -1,5 +1,6 @@
 import type { ToolConfig } from '@/tools/types'
 import type { XWriteParams, XWriteResponse } from '@/tools/x/types'
+import { transformTweet } from '@/tools/x/types'
 
 export const xWriteTool: ToolConfig<XWriteParams, XWriteResponse> = {
   id: 'x_write',
@@ -10,7 +11,6 @@ export const xWriteTool: ToolConfig<XWriteParams, XWriteResponse> = {
   oauth: {
     required: true,
     provider: 'x',
-    additionalScopes: ['tweet.read', 'tweet.write', 'users.read'],
   },
 
   params: {
@@ -82,18 +82,7 @@ export const xWriteTool: ToolConfig<XWriteParams, XWriteResponse> = {
     return {
       success: true,
       output: {
-        tweet: {
-          id: data.data.id,
-          text: data.data.text,
-          createdAt: data.data.created_at,
-          authorId: data.data.author_id,
-          conversationId: data.data.conversation_id,
-          inReplyToUserId: data.data.in_reply_to_user_id,
-          attachments: {
-            mediaKeys: data.data.attachments?.media_keys,
-            pollId: data.data.attachments?.poll_ids?.[0],
-          },
-        },
+        tweet: transformTweet(data.data),
       },
     }
   },

@@ -1,5 +1,5 @@
+import { createLogger } from '@sim/logger'
 import { WorkflowIcon } from '@/components/icons'
-import { createLogger } from '@/lib/logs/console/logger'
 import type { BlockConfig } from '@/blocks/types'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 
@@ -32,19 +32,20 @@ export const WorkflowBlock: BlockConfig = {
   description:
     'This is a core workflow block. Execute another workflow as a block in your workflow. Enter the input variable to pass to the child workflow.',
   category: 'blocks',
-  bgColor: '#705335',
+  bgColor: '#6366F1',
   icon: WorkflowIcon,
   subBlocks: [
     {
       id: 'workflowId',
       title: 'Select Workflow',
-      type: 'dropdown',
+      type: 'combobox',
       options: getAvailableWorkflows,
+      placeholder: 'Search workflows...',
       required: true,
     },
     {
       id: 'input',
-      title: 'Input Variable (Optional)',
+      title: 'Input Variable',
       type: 'short-input',
       placeholder: 'Select a variable to pass to the child workflow',
       description: 'This variable will be available as start.input in the child workflow',

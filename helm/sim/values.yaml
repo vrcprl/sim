@@ -16,16 +16,16 @@ global:
 app:
   # Enable/disable the main application
   enabled: true
-  
+
   # Image configuration
   image:
     repository: simstudioai/simstudio
     tag: latest
     pullPolicy: Always
-  
+
   # Number of replicas
   replicaCount: 1
-  
+
   # Resource limits and requests
   resources:
     limits:
@@ -34,26 +34,45 @@ app:
     requests:
       memory: "2Gi"
       cpu: "1000m"
-  
+
   # Node selector for pod scheduling (leave empty to allow scheduling on any node)
   nodeSelector: {}
-  
+
   # Pod security context
   podSecurityContext:
     fsGroup: 1001
-  
+
   # Container security context
   securityContext:
     runAsNonRoot: true
     runAsUser: 1001
-  
+
+  # Secret management configuration
+  # Use this to reference pre-existing Kubernetes secrets instead of defining values directly
+  # This enables integration with External Secrets Operator, HashiCorp Vault, Azure Key Vault, etc.
+  secrets:
+    existingSecret:
+      # Set to true to use an existing secret instead of creating one from values
+      enabled: false
+      # Name of the existing Kubernetes secret containing app credentials
+      name: ""
+      # Key mappings - specify the key names in your existing secret
+      # Only needed if your secret uses different key names than the defaults
+      keys:
+        BETTER_AUTH_SECRET: "BETTER_AUTH_SECRET"
+        ENCRYPTION_KEY: "ENCRYPTION_KEY"
+        INTERNAL_API_SECRET: "INTERNAL_API_SECRET"
+        CRON_SECRET: "CRON_SECRET"
+        API_ENCRYPTION_KEY: "API_ENCRYPTION_KEY"
+
   # Environment variables
   env:
     # Application URLs
     NEXT_PUBLIC_APP_URL: "http://localhost:3000"
     BETTER_AUTH_URL: "http://localhost:3000"
-    SOCKET_SERVER_URL: "http://localhost:3002"
-    NEXT_PUBLIC_SOCKET_URL: "http://localhost:3002"
+    # SOCKET_SERVER_URL: Auto-detected when realtime.enabled=true (uses internal service)
+    # Only set this if using an external WebSocket service with realtime.enabled=false
+    NEXT_PUBLIC_SOCKET_URL: "http://localhost:3002"  # Public WebSocket URL for browsers
     
     # Node environment
     NODE_ENV: "production"
@@ -63,6 +82,15 @@ app:
     # Generate secure 32-character secrets using: openssl rand -hex 32
     BETTER_AUTH_SECRET: ""  # REQUIRED - set via --set flag or external secret manager
     ENCRYPTION_KEY: ""      # REQUIRED - set via --set flag or external secret manager
+    INTERNAL_API_SECRET: "" # REQUIRED - set via --set flag or external secret manager, used for internal service-to-service authentication
+
+    # Optional: Scheduled Jobs Authentication
+    # Generate using: openssl rand -hex 32
+    CRON_SECRET: ""         # OPTIONAL - required only if cronjobs.enabled=true, authenticates scheduled job requests
+
+    # Optional: API Key Encryption (RECOMMENDED for production)
+    # Generate 64-character hex string using: openssl rand -hex 32 (outputs 64 hex chars = 32 bytes)
+    API_ENCRYPTION_KEY: ""  # OPTIONAL - encrypts API keys at rest, must be exactly 64 hex characters, if not set keys stored in plain text
     
     # Email & Communication
     EMAIL_VERIFICATION_ENABLED: "false"                   # Enable email verification for user registration and login (defaults to false)
@@ -90,31 +118,71 @@ app:
     
     # Rate Limiting Configuration (per minute)
     RATE_LIMIT_WINDOW_MS: "60000"                         # Rate limit window duration (1 minute)
-    RATE_LIMIT_FREE_SYNC: "10"                            # Free tier sync API executions
-    RATE_LIMIT_PRO_SYNC: "25"                             # Pro tier sync API executions
-    RATE_LIMIT_TEAM_SYNC: "75"                            # Team tier sync API executions
-    RATE_LIMIT_ENTERPRISE_SYNC: "150"                     # Enterprise tier sync API executions
-    RATE_LIMIT_FREE_ASYNC: "50"                           # Free tier async API executions  
-    RATE_LIMIT_PRO_ASYNC: "200"                           # Pro tier async API executions
-    RATE_LIMIT_TEAM_ASYNC: "500"                          # Team tier async API executions
-    RATE_LIMIT_ENTERPRISE_ASYNC: "1000"                   # Enterprise tier async API executions
-    MANUAL_EXECUTION_LIMIT: "999999"                      # Manual execution bypass value
+    RATE_LIMIT_FREE_SYNC: "10"                            # Sync API executions per minute
+    RATE_LIMIT_FREE_ASYNC: "50"                           # Async API executions per minute
     
     # UI Branding & Whitelabeling Configuration
     NEXT_PUBLIC_BRAND_NAME: "Sim"                         # Custom brand name
     NEXT_PUBLIC_BRAND_LOGO_URL: ""                        # Custom logo URL (leave empty for default)
     NEXT_PUBLIC_BRAND_FAVICON_URL: ""                     # Custom favicon URL (leave empty for default)
+    NEXT_PUBLIC_BRAND_PRIMARY_COLOR: ""                   # Primary brand color (hex, e.g., "#701a75")
+    NEXT_PUBLIC_BRAND_ACCENT_COLOR: ""                    # Accent color (hex, e.g., "#9333ea")
+    NEXT_PUBLIC_BRAND_BACKGROUND_COLOR: ""                # Background color (hex, e.g., "#ffffff")
     NEXT_PUBLIC_CUSTOM_CSS_URL: ""                        # Custom stylesheet URL (leave empty for none)
     NEXT_PUBLIC_SUPPORT_EMAIL: "help@sim.ai"             # Support email address
     NEXT_PUBLIC_DOCUMENTATION_URL: ""                    # Documentation URL (leave empty for none)
     NEXT_PUBLIC_TERMS_URL: ""                            # Terms of service URL (leave empty for none)
     NEXT_PUBLIC_PRIVACY_URL: ""                          # Privacy policy URL (leave empty for none)
-    
+
+    # Registration Control
+    DISABLE_REGISTRATION: ""                              # Set to "true" to disable new user signups
+    EMAIL_PASSWORD_SIGNUP_ENABLED: ""                     # Set to "false" to disable email/password login (SSO-only mode, server-side enforcement)
+    NEXT_PUBLIC_EMAIL_PASSWORD_SIGNUP_ENABLED: ""         # Set to "false" to hide email/password login form (UI-side)
+
     # Access Control (leave empty if not restricting login)
     ALLOWED_LOGIN_EMAILS: ""                             # Comma-separated list of allowed email addresses for login
     ALLOWED_LOGIN_DOMAINS: ""                            # Comma-separated list of allowed email domains for login
-    
-  
+
+    # LLM Provider/Model Restrictions (leave empty if not restricting)
+    BLACKLISTED_PROVIDERS: ""                            # Comma-separated provider IDs to hide from UI (e.g., "openai,anthropic,google")
+    BLACKLISTED_MODELS: ""                               # Comma-separated model names/prefixes to hide (e.g., "gpt-4,claude-*")
+
+    # Invitation Control
+    DISABLE_INVITATIONS: ""                              # Set to "true" to disable workspace invitations globally
+    NEXT_PUBLIC_DISABLE_INVITATIONS: ""                  # Set to "true" to hide invitation UI elements
+
+    # SSO Configuration (Enterprise Single Sign-On)
+    # Set to "true" AFTER running the SSO registration script
+    SSO_ENABLED: ""                                       # Enable SSO authentication ("true" to enable)
+    NEXT_PUBLIC_SSO_ENABLED: ""                           # Show SSO login button in UI ("true" to enable)
+
+    # AWS S3 Cloud Storage Configuration (optional - for file storage)
+    # If configured, files will be stored in S3 instead of local storage
+    AWS_REGION: ""                                        # AWS region (e.g., "us-east-1")
+    AWS_ACCESS_KEY_ID: ""                                 # AWS access key ID
+    AWS_SECRET_ACCESS_KEY: ""                             # AWS secret access key
+    S3_BUCKET_NAME: ""                                    # S3 bucket for workspace files
+    S3_KB_BUCKET_NAME: ""                                 # S3 bucket for knowledge base files
+    S3_EXECUTION_FILES_BUCKET_NAME: ""                    # S3 bucket for workflow execution files
+    S3_CHAT_BUCKET_NAME: ""                               # S3 bucket for deployed chat files
+    S3_COPILOT_BUCKET_NAME: ""                            # S3 bucket for copilot files
+    S3_PROFILE_PICTURES_BUCKET_NAME: ""                   # S3 bucket for user profile pictures
+    S3_OG_IMAGES_BUCKET_NAME: ""                          # S3 bucket for OpenGraph preview images
+
+    # Azure Blob Storage Configuration (optional - for file storage)
+    # If configured, files will be stored in Azure Blob instead of local storage
+    # Note: Azure Blob takes precedence over S3 if both are configured
+    AZURE_ACCOUNT_NAME: ""                                # Azure storage account name
+    AZURE_ACCOUNT_KEY: ""                                 # Azure storage account key
+    AZURE_CONNECTION_STRING: ""                           # Azure connection string (alternative to account name/key)
+    AZURE_STORAGE_CONTAINER_NAME: ""                      # Azure container for workspace files
+    AZURE_STORAGE_KB_CONTAINER_NAME: ""                   # Azure container for knowledge base files
+    AZURE_STORAGE_EXECUTION_FILES_CONTAINER_NAME: ""      # Azure container for workflow execution files
+    AZURE_STORAGE_CHAT_CONTAINER_NAME: ""                 # Azure container for deployed chat files
+    AZURE_STORAGE_COPILOT_CONTAINER_NAME: ""              # Azure container for copilot files
+    AZURE_STORAGE_PROFILE_PICTURES_CONTAINER_NAME: ""     # Azure container for user profile pictures
+    AZURE_STORAGE_OG_IMAGES_CONTAINER_NAME: ""            # Azure container for OpenGraph preview images
+
   # Service configuration
   service:
     type: ClusterIP
@@ -261,6 +329,12 @@ postgresql:
     username: postgres
     password: ""  # REQUIRED - set via --set flag or external secret manager
     database: sim
+    # Use an existing secret for PostgreSQL credentials
+    # This enables integration with External Secrets Operator, HashiCorp Vault, etc.
+    existingSecret:
+      enabled: false
+      name: ""           # Name of existing Kubernetes secret
+      passwordKey: "POSTGRES_PASSWORD"  # Key in the secret containing the password
   
   # Node selector for database pod scheduling (leave empty to allow scheduling on any node)
   nodeSelector: {}
@@ -343,16 +417,23 @@ postgresql:
 externalDatabase:
   # Enable to use an external database instead of the internal PostgreSQL instance
   enabled: false
-  
+
   # Database connection details
   host: "external-db.example.com"
   port: 5432
   username: postgres
   password: ""
   database: sim
-  
+
   # SSL configuration
   sslMode: require
+
+  # Use an existing secret for external database credentials
+  # This enables integration with External Secrets Operator, HashiCorp Vault, etc.
+  existingSecret:
+    enabled: false
+    name: ""           # Name of existing Kubernetes secret
+    passwordKey: "EXTERNAL_DB_PASSWORD"  # Key in the secret containing the password
 
 # Ollama local AI models configuration
 ollama:
@@ -643,7 +724,25 @@ cronjobs:
       concurrencyPolicy: Forbid
       successfulJobsHistoryLimit: 3
       failedJobsHistoryLimit: 1
-      
+
+    rssWebhookPoll:
+      enabled: true
+      name: rss-webhook-poll
+      schedule: "*/1 * * * *"
+      path: "/api/webhooks/poll/rss"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 1
+
+    imapWebhookPoll:
+      enabled: true
+      name: imap-webhook-poll
+      schedule: "*/1 * * * *"
+      path: "/api/webhooks/poll/imap"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 1
+
     renewSubscriptions:
       enabled: true
       name: renew-subscriptions
@@ -652,7 +751,15 @@ cronjobs:
       concurrencyPolicy: Forbid
       successfulJobsHistoryLimit: 3
       failedJobsHistoryLimit: 1
-      
+
+    inactivityAlertPoll:
+      enabled: true
+      name: inactivity-alert-poll
+      schedule: "*/15 * * * *"
+      path: "/api/notifications/poll"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 1
 
   # Global CronJob settings
   image:
@@ -736,3 +843,258 @@ telemetry:
     endpoint: "http://otlp-collector:4317"
     tls:
       enabled: false
+
+# Copilot service configuration (optional microservice)
+copilot:
+  # Enable/disable the copilot service
+  enabled: false
+  
+  # Server deployment configuration
+  server:
+    # Image configuration
+    image:
+      repository: simstudioai/copilot
+      tag: latest
+      pullPolicy: Always
+    
+    # Number of replicas
+    replicaCount: 1
+    
+    # Resource limits and requests
+    resources:
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+    
+    # Node selector for pod scheduling
+    # Leave empty to run on same infrastructure as main Sim platform
+    # Or specify labels to isolate on dedicated nodes: { "workload-type": "copilot" }
+    nodeSelector: {}
+    
+    # Pod security context
+    podSecurityContext:
+      fsGroup: 1001
+    
+    # Container security context
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1001
+    
+    # Environment variables (required and optional)
+    env:
+      PORT: "8080"
+      SERVICE_NAME: "copilot"
+      ENVIRONMENT: "production"
+      AGENT_API_DB_ENCRYPTION_KEY: ""
+      INTERNAL_API_SECRET: ""
+      LICENSE_KEY: ""
+      OPENAI_API_KEY_1: ""
+      ANTHROPIC_API_KEY_1: ""
+      SIM_BASE_URL: ""
+      SIM_AGENT_API_KEY: ""
+      REDIS_URL: ""
+      # Optional configuration
+      LOG_LEVEL: "info"
+      CORS_ALLOWED_ORIGINS: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    
+    # Optional: additional static environment variables
+    extraEnv: []
+    
+    # Optional: references to existing ConfigMaps/Secrets
+    extraEnvFrom: []
+    
+    # Secret generation configuration (set create=false to use an existing secret)
+    secret:
+      create: true
+      name: ""
+      annotations: {}
+    
+    # Service configuration
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+    
+    # Health checks
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    
+    livenessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+      initialDelaySeconds: 15
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+    # Pod Disruption Budget for high availability
+    podDisruptionBudget:
+      enabled: false
+      minAvailable: 1
+
+  # PostgreSQL database for copilot (separate from main Sim database)
+  postgresql:
+    # Enable/disable internal PostgreSQL for copilot
+    enabled: true
+    
+    # Image configuration
+    image:
+      repository: postgres
+      tag: 16-alpine
+      pullPolicy: IfNotPresent
+    
+    # Authentication configuration
+    auth:
+      username: copilot
+      password: ""  # REQUIRED - set via --set flag or external secret manager
+      database: copilot
+    
+    # Node selector for database pod scheduling
+    # Leave empty to run on same infrastructure as main Sim platform
+    # Or specify labels to isolate on dedicated nodes: { "workload-type": "copilot" }
+    nodeSelector: {}
+    
+    # Resource limits and requests
+    resources:
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+    
+    # Pod security context
+    podSecurityContext:
+      fsGroup: 999
+    
+    # Container security context
+    securityContext:
+      runAsUser: 999
+    
+    # Persistence configuration
+    persistence:
+      enabled: true
+      storageClass: ""
+      size: 10Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Service configuration
+    service:
+      type: ClusterIP
+      port: 5432
+      targetPort: 5432
+    
+    # Health checks
+    livenessProbe:
+      exec:
+        command: ["pg_isready", "-U", "copilot", "-d", "copilot"]
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 5
+      failureThreshold: 10
+    
+    readinessProbe:
+      exec:
+        command: ["pg_isready", "-U", "copilot", "-d", "copilot"]
+      initialDelaySeconds: 5
+      periodSeconds: 3
+      timeoutSeconds: 5
+      failureThreshold: 10
+  
+  # External database configuration (use when connecting to a managed database)
+  database:
+    existingSecretName: ""
+    secretKey: DATABASE_URL
+    url: ""
+  
+  # Migration job configuration
+  migrations:
+    # Enable/disable migrations job
+    enabled: true
+    
+    # Image configuration (same as server)
+    image:
+      repository: simstudioai/copilot
+      tag: latest
+      pullPolicy: Always
+    
+    # Resource limits and requests
+    resources:
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+    
+    # Pod security context
+    podSecurityContext:
+      fsGroup: 1001
+    
+    # Container security context
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1001
+    
+    # Job configuration
+    backoffLimit: 3
+    restartPolicy: OnFailure
+
+# External Secrets Operator integration
+# Use this to automatically sync secrets from external secret managers (Azure Key Vault, AWS Secrets Manager, etc.)
+# Prerequisites: Install External Secrets Operator in your cluster first
+# See: https://external-secrets.io/latest/introduction/getting-started/
+externalSecrets:
+  # Enable External Secrets Operator integration
+  enabled: false
+
+  # ESO API version - use "v1" for ESO v0.17+ (recommended), "v1beta1" for older versions
+  apiVersion: "v1"
+
+  # How often to sync secrets from the external store
+  refreshInterval: "1h"
+
+  # Reference to the SecretStore or ClusterSecretStore
+  secretStoreRef:
+    # Name of the SecretStore or ClusterSecretStore resource
+    name: ""
+    # Kind of the store: "SecretStore" (namespaced) or "ClusterSecretStore" (cluster-wide)
+    kind: "ClusterSecretStore"
+
+  # Remote references - paths/keys in your external secret store
+  # These map to the secrets that will be created in Kubernetes
+  remoteRefs:
+    # App secrets (authentication, encryption keys)
+    app:
+      # Path to BETTER_AUTH_SECRET in external store (e.g., "sim/app/better-auth-secret")
+      BETTER_AUTH_SECRET: ""
+      # Path to ENCRYPTION_KEY in external store
+      ENCRYPTION_KEY: ""
+      # Path to INTERNAL_API_SECRET in external store
+      INTERNAL_API_SECRET: ""
+      # Path to CRON_SECRET in external store (optional)
+      CRON_SECRET: ""
+      # Path to API_ENCRYPTION_KEY in external store (optional)
+      API_ENCRYPTION_KEY: ""
+
+    # PostgreSQL password (for internal PostgreSQL)
+    postgresql:
+      # Path to PostgreSQL password in external store (e.g., "sim/postgresql/password")
+      password: ""
+
+    # External database password (when using managed database services)
+    externalDatabase:
+      # Path to external database password in external store
+      password: ""

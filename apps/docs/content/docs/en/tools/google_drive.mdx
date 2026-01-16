@@ -8,39 +8,6 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 <BlockInfoCard 
   type="google_drive"
   color="#E0E0E0"
-  icon={true}
-  iconSvg={`<svg className="block-icon"
-      xmlns='http://www.w3.org/2000/svg'
-      viewBox='0 0 87.3 78'
-      
-      
-      
-    >
-      <path
-        d='m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z'
-        fill='#0066da'
-      />
-      <path
-        d='m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z'
-        fill='#00ac47'
-      />
-      <path
-        d='m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z'
-        fill='#ea4335'
-      />
-      <path
-        d='m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z'
-        fill='#00832d'
-      />
-      <path
-        d='m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z'
-        fill='#2684fc'
-      />
-      <path
-        d='m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z'
-        fill='#ffba00'
-      />
-    </svg>`}
 />
 
 {/* MANUAL-CONTENT-START:intro */}
@@ -81,15 +48,16 @@ Integrate Google Drive into the workflow. Can create, upload, and list files.
 
 ### `google_drive_upload`
 
-Upload a file to Google Drive
+Upload a file to Google Drive with complete metadata returned
 
 #### Input
 
 | Parameter | Type | Required | Description |
 | --------- | ---- | -------- | ----------- |
 | `fileName` | string | Yes | The name of the file to upload |
-| `content` | string | Yes | The content of the file to upload |
-| `mimeType` | string | No | The MIME type of the file to upload |
+| `file` | file | No | Binary file to upload \(UserFile object\) |
+| `content` | string | No | Text content to upload \(use this OR file, not both\) |
+| `mimeType` | string | No | The MIME type of the file to upload \(auto-detected from file if not provided\) |
 | `folderSelector` | string | No | Select the folder to upload the file to |
 | `folderId` | string | No | The ID of the folder to upload the file to \(internal use\) |
 
@@ -97,11 +65,63 @@ Upload a file to Google Drive
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
-| `file` | json | Uploaded file metadata including ID, name, and links |
+| `file` | object | Complete uploaded file metadata from Google Drive |
+| ↳ `id` | string | Google Drive file ID |
+| ↳ `name` | string | File name |
+| ↳ `mimeType` | string | MIME type |
+| ↳ `kind` | string | Resource type identifier |
+| ↳ `description` | string | File description |
+| ↳ `originalFilename` | string | Original uploaded filename |
+| ↳ `fullFileExtension` | string | Full file extension |
+| ↳ `fileExtension` | string | File extension |
+| ↳ `owners` | json | List of file owners |
+| ↳ `permissions` | json | File permissions |
+| ↳ `permissionIds` | json | Permission IDs |
+| ↳ `shared` | boolean | Whether file is shared |
+| ↳ `ownedByMe` | boolean | Whether owned by current user |
+| ↳ `writersCanShare` | boolean | Whether writers can share |
+| ↳ `viewersCanCopyContent` | boolean | Whether viewers can copy |
+| ↳ `copyRequiresWriterPermission` | boolean | Whether copy requires writer permission |
+| ↳ `sharingUser` | json | User who shared the file |
+| ↳ `starred` | boolean | Whether file is starred |
+| ↳ `trashed` | boolean | Whether file is in trash |
+| ↳ `explicitlyTrashed` | boolean | Whether explicitly trashed |
+| ↳ `appProperties` | json | App-specific properties |
+| ↳ `createdTime` | string | File creation time |
+| ↳ `modifiedTime` | string | Last modification time |
+| ↳ `modifiedByMeTime` | string | When modified by current user |
+| ↳ `viewedByMeTime` | string | When last viewed by current user |
+| ↳ `sharedWithMeTime` | string | When shared with current user |
+| ↳ `lastModifyingUser` | json | User who last modified the file |
+| ↳ `viewedByMe` | boolean | Whether viewed by current user |
+| ↳ `modifiedByMe` | boolean | Whether modified by current user |
+| ↳ `webViewLink` | string | URL to view in browser |
+| ↳ `webContentLink` | string | Direct download URL |
+| ↳ `iconLink` | string | URL to file icon |
+| ↳ `thumbnailLink` | string | URL to thumbnail |
+| ↳ `exportLinks` | json | Export format links |
+| ↳ `size` | string | File size in bytes |
+| ↳ `quotaBytesUsed` | string | Storage quota used |
+| ↳ `md5Checksum` | string | MD5 hash |
+| ↳ `sha1Checksum` | string | SHA-1 hash |
+| ↳ `sha256Checksum` | string | SHA-256 hash |
+| ↳ `parents` | json | Parent folder IDs |
+| ↳ `spaces` | json | Spaces containing file |
+| ↳ `driveId` | string | Shared drive ID |
+| ↳ `capabilities` | json | User capabilities on file |
+| ↳ `version` | string | Version number |
+| ↳ `headRevisionId` | string | Head revision ID |
+| ↳ `hasThumbnail` | boolean | Whether has thumbnail |
+| ↳ `thumbnailVersion` | string | Thumbnail version |
+| ↳ `imageMediaMetadata` | json | Image-specific metadata |
+| ↳ `videoMediaMetadata` | json | Video-specific metadata |
+| ↳ `isAppAuthorized` | boolean | Whether created by requesting app |
+| ↳ `contentRestrictions` | json | Content restrictions |
+| ↳ `linkShareMetadata` | json | Link share metadata |
 
 ### `google_drive_create_folder`
 
-Create a new folder in Google Drive
+Create a new folder in Google Drive with complete metadata returned
 
 #### Input
 
@@ -115,11 +135,125 @@ Create a new folder in Google Drive
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
-| `file` | json | Created folder metadata including ID, name, and parent information |
+| `file` | object | Complete created folder metadata from Google Drive |
+| ↳ `id` | string | Google Drive folder ID |
+| ↳ `name` | string | Folder name |
+| ↳ `mimeType` | string | MIME type \(application/vnd.google-apps.folder\) |
+| ↳ `kind` | string | Resource type identifier |
+| ↳ `description` | string | Folder description |
+| ↳ `owners` | json | List of folder owners |
+| ↳ `permissions` | json | Folder permissions |
+| ↳ `permissionIds` | json | Permission IDs |
+| ↳ `shared` | boolean | Whether folder is shared |
+| ↳ `ownedByMe` | boolean | Whether owned by current user |
+| ↳ `writersCanShare` | boolean | Whether writers can share |
+| ↳ `viewersCanCopyContent` | boolean | Whether viewers can copy |
+| ↳ `copyRequiresWriterPermission` | boolean | Whether copy requires writer permission |
+| ↳ `sharingUser` | json | User who shared the folder |
+| ↳ `starred` | boolean | Whether folder is starred |
+| ↳ `trashed` | boolean | Whether folder is in trash |
+| ↳ `explicitlyTrashed` | boolean | Whether explicitly trashed |
+| ↳ `appProperties` | json | App-specific properties |
+| ↳ `folderColorRgb` | string | Folder color |
+| ↳ `createdTime` | string | Folder creation time |
+| ↳ `modifiedTime` | string | Last modification time |
+| ↳ `modifiedByMeTime` | string | When modified by current user |
+| ↳ `viewedByMeTime` | string | When last viewed by current user |
+| ↳ `sharedWithMeTime` | string | When shared with current user |
+| ↳ `lastModifyingUser` | json | User who last modified the folder |
+| ↳ `viewedByMe` | boolean | Whether viewed by current user |
+| ↳ `modifiedByMe` | boolean | Whether modified by current user |
+| ↳ `webViewLink` | string | URL to view in browser |
+| ↳ `iconLink` | string | URL to folder icon |
+| ↳ `parents` | json | Parent folder IDs |
+| ↳ `spaces` | json | Spaces containing folder |
+| ↳ `driveId` | string | Shared drive ID |
+| ↳ `capabilities` | json | User capabilities on folder |
+| ↳ `version` | string | Version number |
+| ↳ `isAppAuthorized` | boolean | Whether created by requesting app |
+| ↳ `contentRestrictions` | json | Content restrictions |
+| ↳ `linkShareMetadata` | json | Link share metadata |
+
+### `google_drive_download`
+
+Download a file from Google Drive with complete metadata (exports Google Workspace files automatically)
+
+#### Input
+
+| Parameter | Type | Required | Description |
+| --------- | ---- | -------- | ----------- |
+| `fileId` | string | Yes | The ID of the file to download |
+| `mimeType` | string | No | The MIME type to export Google Workspace files to \(optional\) |
+| `fileName` | string | No | Optional filename override |
+| `includeRevisions` | boolean | No | Whether to include revision history in the metadata \(default: true, returns first 100 revisions\) |
+
+#### Output
+
+| Parameter | Type | Description |
+| --------- | ---- | ----------- |
+| `file` | object | Downloaded file data |
+| ↳ `name` | string | File name |
+| ↳ `mimeType` | string | MIME type of the file |
+| ↳ `data` | string | File content as base64-encoded string |
+| ↳ `size` | number | File size in bytes |
+| `metadata` | object | Complete file metadata from Google Drive |
+| ↳ `id` | string | Google Drive file ID |
+| ↳ `name` | string | File name |
+| ↳ `mimeType` | string | MIME type |
+| ↳ `kind` | string | Resource type identifier |
+| ↳ `description` | string | File description |
+| ↳ `originalFilename` | string | Original uploaded filename |
+| ↳ `fullFileExtension` | string | Full file extension |
+| ↳ `fileExtension` | string | File extension |
+| ↳ `owners` | json | List of file owners |
+| ↳ `permissions` | json | File permissions |
+| ↳ `permissionIds` | json | Permission IDs |
+| ↳ `shared` | boolean | Whether file is shared |
+| ↳ `ownedByMe` | boolean | Whether owned by current user |
+| ↳ `writersCanShare` | boolean | Whether writers can share |
+| ↳ `viewersCanCopyContent` | boolean | Whether viewers can copy |
+| ↳ `copyRequiresWriterPermission` | boolean | Whether copy requires writer permission |
+| ↳ `sharingUser` | json | User who shared the file |
+| ↳ `starred` | boolean | Whether file is starred |
+| ↳ `trashed` | boolean | Whether file is in trash |
+| ↳ `explicitlyTrashed` | boolean | Whether explicitly trashed |
+| ↳ `appProperties` | json | App-specific properties |
+| ↳ `createdTime` | string | File creation time |
+| ↳ `modifiedTime` | string | Last modification time |
+| ↳ `modifiedByMeTime` | string | When modified by current user |
+| ↳ `viewedByMeTime` | string | When last viewed by current user |
+| ↳ `sharedWithMeTime` | string | When shared with current user |
+| ↳ `lastModifyingUser` | json | User who last modified the file |
+| ↳ `viewedByMe` | boolean | Whether viewed by current user |
+| ↳ `modifiedByMe` | boolean | Whether modified by current user |
+| ↳ `webViewLink` | string | URL to view in browser |
+| ↳ `webContentLink` | string | Direct download URL |
+| ↳ `iconLink` | string | URL to file icon |
+| ↳ `thumbnailLink` | string | URL to thumbnail |
+| ↳ `exportLinks` | json | Export format links |
+| ↳ `size` | string | File size in bytes |
+| ↳ `quotaBytesUsed` | string | Storage quota used |
+| ↳ `md5Checksum` | string | MD5 hash |
+| ↳ `sha1Checksum` | string | SHA-1 hash |
+| ↳ `sha256Checksum` | string | SHA-256 hash |
+| ↳ `parents` | json | Parent folder IDs |
+| ↳ `spaces` | json | Spaces containing file |
+| ↳ `driveId` | string | Shared drive ID |
+| ↳ `capabilities` | json | User capabilities on file |
+| ↳ `version` | string | Version number |
+| ↳ `headRevisionId` | string | Head revision ID |
+| ↳ `hasThumbnail` | boolean | Whether has thumbnail |
+| ↳ `thumbnailVersion` | string | Thumbnail version |
+| ↳ `imageMediaMetadata` | json | Image-specific metadata |
+| ↳ `videoMediaMetadata` | json | Video-specific metadata |
+| ↳ `isAppAuthorized` | boolean | Whether created by requesting app |
+| ↳ `contentRestrictions` | json | Content restrictions |
+| ↳ `linkShareMetadata` | json | Link share metadata |
+| ↳ `revisions` | json | File revision history \(first 100 revisions only\) |
 
 ### `google_drive_list`
 
-List files and folders in Google Drive
+List files and folders in Google Drive with complete metadata
 
 #### Input
 
@@ -127,19 +261,67 @@ List files and folders in Google Drive
 | --------- | ---- | -------- | ----------- |
 | `folderSelector` | string | No | Select the folder to list files from |
 | `folderId` | string | No | The ID of the folder to list files from \(internal use\) |
-| `query` | string | No | A query to filter the files |
-| `pageSize` | number | No | The number of files to return |
+| `query` | string | No | Search term to filter files by name \(e.g. "budget" finds files with "budget" in the name\). Do NOT use Google Drive query syntax here - just provide a plain search term. |
+| `pageSize` | number | No | The maximum number of files to return \(default: 100\) |
 | `pageToken` | string | No | The page token to use for pagination |
 
 #### Output
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
-| `files` | json | Array of file metadata objects from the specified folder |
+| `files` | array | Array of file metadata objects from Google Drive |
+|   ↳ `id` | string | Google Drive file ID |
+|   ↳ `name` | string | File name |
+|   ↳ `mimeType` | string | MIME type |
+|   ↳ `kind` | string | Resource type identifier |
+|   ↳ `description` | string | File description |
+|   ↳ `originalFilename` | string | Original uploaded filename |
+|   ↳ `fullFileExtension` | string | Full file extension |
+|   ↳ `fileExtension` | string | File extension |
+|   ↳ `owners` | json | List of file owners |
+|   ↳ `permissions` | json | File permissions |
+|   ↳ `permissionIds` | json | Permission IDs |
+|   ↳ `shared` | boolean | Whether file is shared |
+|   ↳ `ownedByMe` | boolean | Whether owned by current user |
+|   ↳ `writersCanShare` | boolean | Whether writers can share |
+|   ↳ `viewersCanCopyContent` | boolean | Whether viewers can copy |
+|   ↳ `copyRequiresWriterPermission` | boolean | Whether copy requires writer permission |
+|   ↳ `sharingUser` | json | User who shared the file |
+|   ↳ `starred` | boolean | Whether file is starred |
+|   ↳ `trashed` | boolean | Whether file is in trash |
+|   ↳ `explicitlyTrashed` | boolean | Whether explicitly trashed |
+|   ↳ `appProperties` | json | App-specific properties |
+|   ↳ `createdTime` | string | File creation time |
+|   ↳ `modifiedTime` | string | Last modification time |
+|   ↳ `modifiedByMeTime` | string | When modified by current user |
+|   ↳ `viewedByMeTime` | string | When last viewed by current user |
+|   ↳ `sharedWithMeTime` | string | When shared with current user |
+|   ↳ `lastModifyingUser` | json | User who last modified the file |
+|   ↳ `viewedByMe` | boolean | Whether viewed by current user |
+|   ↳ `modifiedByMe` | boolean | Whether modified by current user |
+|   ↳ `webViewLink` | string | URL to view in browser |
+|   ↳ `webContentLink` | string | Direct download URL |
+|   ↳ `iconLink` | string | URL to file icon |
+|   ↳ `thumbnailLink` | string | URL to thumbnail |
+|   ↳ `exportLinks` | json | Export format links |
+|   ↳ `size` | string | File size in bytes |
+|   ↳ `quotaBytesUsed` | string | Storage quota used |
+|   ↳ `md5Checksum` | string | MD5 hash |
+|   ↳ `sha1Checksum` | string | SHA-1 hash |
+|   ↳ `sha256Checksum` | string | SHA-256 hash |
+|   ↳ `parents` | json | Parent folder IDs |
+|   ↳ `spaces` | json | Spaces containing file |
+|   ↳ `driveId` | string | Shared drive ID |
+|   ↳ `capabilities` | json | User capabilities on file |
+|   ↳ `version` | string | Version number |
+|   ↳ `headRevisionId` | string | Head revision ID |
+|   ↳ `hasThumbnail` | boolean | Whether has thumbnail |
+|   ↳ `thumbnailVersion` | string | Thumbnail version |
+|   ↳ `imageMediaMetadata` | json | Image-specific metadata |
+|   ↳ `videoMediaMetadata` | json | Video-specific metadata |
+|   ↳ `isAppAuthorized` | boolean | Whether created by requesting app |
+|   ↳ `contentRestrictions` | json | Content restrictions |
+|   ↳ `linkShareMetadata` | json | Link share metadata |
+| `nextPageToken` | string | Token for fetching the next page of results |
 
 
-
-## Notes
-
-- Category: `tools`
-- Type: `google_drive`

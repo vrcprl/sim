@@ -20,6 +20,19 @@ export const queryTool: ToolConfig<SupabaseQueryParams, SupabaseQueryResponse> =
       visibility: 'user-or-llm',
       description: 'The name of the Supabase table to query',
     },
+    schema: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description:
+        'Database schema to query from (default: public). Use this to access tables in other schemas.',
+    },
+    select: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description: 'Columns to return (comma-separated). Defaults to * (all columns)',
+    },
     filter: {
       type: 'string',
       required: false,
@@ -49,7 +62,8 @@ export const queryTool: ToolConfig<SupabaseQueryParams, SupabaseQueryResponse> =
   request: {
     url: (params) => {
       // Construct the URL for the Supabase REST API
-      let url = `https://${params.projectId}.supabase.co/rest/v1/${params.table}?select=*`
+      const selectColumns = params.select?.trim() || '*'
+      let url = `https://${params.projectId}.supabase.co/rest/v1/${params.table}?select=${encodeURIComponent(selectColumns)}`
 
       // Add filters if provided - using PostgREST syntax
       if (params.filter?.trim()) {
@@ -78,16 +92,22 @@ export const queryTool: ToolConfig<SupabaseQueryParams, SupabaseQueryResponse> =
 
       // Add limit if provided
       if (params.limit) {
-        url += `&limit=${params.limit}`
+        url += `&limit=${Number(params.limit)}`
       }
 
       return url
     },
     method: 'GET',
-    headers: (params) => ({
-      apikey: params.apiKey,
-      Authorization: `Bearer ${params.apiKey}`,
-    }),
+    headers: (params) => {
+      const headers: Record<string, string> = {
+        apikey: params.apiKey,
+        Authorization: `Bearer ${params.apiKey}`,
+      }
+      if (params.schema) {
+        headers['Accept-Profile'] = params.schema
+      }
+      return headers
+    },
   },
 
   transformResponse: async (response: Response) => {

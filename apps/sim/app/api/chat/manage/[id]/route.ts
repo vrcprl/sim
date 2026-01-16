@@ -1,13 +1,14 @@
 import { db } from '@sim/db'
 import { chat } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
-import { isDev } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getEmailDomain } from '@/lib/urls/utils'
-import { encryptSecret } from '@/lib/utils'
+import { isDev } from '@/lib/core/config/feature-flags'
+import { encryptSecret } from '@/lib/core/security/encryption'
+import { getEmailDomain } from '@/lib/core/utils/urls'
+import { deployWorkflow } from '@/lib/workflows/persistence/utils'
 import { checkChatAccess } from '@/app/api/chat/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -31,7 +32,7 @@ const chatUpdateSchema = z.object({
       imageUrl: z.string().optional(),
     })
     .optional(),
-  authType: z.enum(['public', 'password', 'email']).optional(),
+  authType: z.enum(['public', 'password', 'email', 'sso']).optional(),
   password: z.string().optional(),
   allowedEmails: z.array(z.string()).optional(),
   outputConfigs: z
@@ -134,6 +135,22 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         }
       }
 
+      // Redeploy the workflow to ensure latest version is active
+      const deployResult = await deployWorkflow({
+        workflowId: existingChat[0].workflowId,
+        deployedBy: session.user.id,
+      })
+
+      if (!deployResult.success) {
+        logger.warn(
+          `Failed to redeploy workflow for chat update: ${deployResult.error}, continuing with chat update`
+        )
+      } else {
+        logger.info(
+          `Redeployed workflow ${existingChat[0].workflowId} for chat update (v${deployResult.version})`
+        )
+      }
+
       let encryptedPassword
 
       if (password) {
@@ -165,7 +182,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           updateData.allowedEmails = []
         } else if (authType === 'password') {
           updateData.allowedEmails = []
-        } else if (authType === 'email') {
+        } else if (authType === 'email' || authType === 'sso') {
           updateData.password = null
         }
       }

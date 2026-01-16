@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   GraphApiResponse,
   SharepointPageContent,
@@ -19,7 +19,6 @@ export const readPageTool: ToolConfig<SharepointToolParams, SharepointReadPageRe
   oauth: {
     required: true,
     provider: 'sharepoint',
-    additionalScopes: ['openid', 'profile', 'email', 'Sites.Read.All', 'offline_access'],
   },
 
   params: {

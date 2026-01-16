@@ -53,7 +53,7 @@ export const responsesTool: ToolConfig<TypeformResponsesParams, TypeformResponse
       const queryParams = []
 
       if (params.pageSize) {
-        queryParams.push(`page_size=${params.pageSize}`)
+        queryParams.push(`page_size=${Number(params.pageSize)}`)
       }
 
       if (params.since) {
@@ -84,5 +84,21 @@ export const responsesTool: ToolConfig<TypeformResponsesParams, TypeformResponse
       success: true,
       output: data,
     }
+  },
+
+  outputs: {
+    total_items: {
+      type: 'number',
+      description: 'Total number of responses',
+    },
+    page_count: {
+      type: 'number',
+      description: 'Total number of pages available',
+    },
+    items: {
+      type: 'array',
+      description:
+        'Array of response objects with response_id, submitted_at, answers, and metadata',
+    },
   },
 }

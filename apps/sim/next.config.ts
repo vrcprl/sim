@@ -1,7 +1,11 @@
 import type { NextConfig } from 'next'
-import { env, getEnv, isTruthy } from './lib/env'
-import { isDev, isHosted } from './lib/environment'
-import { getMainCSPPolicy, getWorkflowExecutionCSPPolicy } from './lib/security/csp'
+import { env, getEnv, isTruthy } from './lib/core/config/env'
+import { isDev, isHosted } from './lib/core/config/feature-flags'
+import {
+  getFormEmbedCSPPolicy,
+  getMainCSPPolicy,
+  getWorkflowExecutionCSPPolicy,
+} from './lib/core/security/csp'
 
 const nextConfig: NextConfig = {
   devIndicators: false,
@@ -68,17 +72,28 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: isTruthy(env.DOCKER_BUILD),
   },
-  eslint: {
-    ignoreDuringBuilds: isTruthy(env.DOCKER_BUILD),
-  },
   output: isTruthy(env.DOCKER_BUILD) ? 'standalone' : undefined,
   turbopack: {
     resolveExtensions: ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
   },
-  serverExternalPackages: ['pdf-parse'],
+  serverExternalPackages: [
+    'unpdf',
+    'ffmpeg-static',
+    'fluent-ffmpeg',
+    'pino',
+    'pino-pretty',
+    'thread-stream',
+    'ws',
+    'isolated-vm',
+  ],
+  outputFileTracingIncludes: {
+    '/api/tools/stagehand/*': ['./node_modules/ws/**/*'],
+    '/*': ['./node_modules/sharp/**/*', './node_modules/@img/**/*'],
+  },
   experimental: {
     optimizeCss: true,
     turbopackSourceMaps: false,
+    turbopackFileSystemCacheForDev: true,
   },
   ...(isDev && {
     allowedDevOrigins: [
@@ -185,10 +200,39 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // Form pages - allow iframe embedding from any origin
+      {
+        source: '/form/:path*',
+        headers: [
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          },
+          // No X-Frame-Options to allow iframe embedding
+          {
+            key: 'Content-Security-Policy',
+            value: getFormEmbedCSPPolicy(),
+          },
+          // Permissive CORS for form API requests from embedded forms
+          { key: 'Cross-Origin-Embedder-Policy', value: 'unsafe-none' },
+          { key: 'Cross-Origin-Opener-Policy', value: 'unsafe-none' },
+        ],
+      },
+      // Form API routes - allow cross-origin requests
+      {
+        source: '/api/form/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, X-Requested-With' },
+          { key: 'Access-Control-Allow-Credentials', value: 'true' },
+        ],
+      },
       // Apply security headers to routes not handled by middleware runtime CSP
       // Middleware handles: /, /workspace/*, /chat/*
+      // Exclude form routes which have their own permissive headers
       {
-        source: '/((?!workspace|chat$).*)',
+        source: '/((?!workspace|chat$|form).*)',
         headers: [
           {
             key: 'X-Content-Type-Options',
@@ -209,12 +253,57 @@ const nextConfig: NextConfig = {
   async redirects() {
     const redirects = []
 
-    // Redirect /building to /blog (legacy URL support)
-    redirects.push({
-      source: '/building/:path*',
-      destination: '/blog/:path*',
-      permanent: true,
-    })
+    // Social link redirects (used in emails to avoid spam filter issues)
+    redirects.push(
+      {
+        source: '/discord',
+        destination: 'https://discord.gg/Hr4UWYEcTT',
+        permanent: false,
+      },
+      {
+        source: '/x',
+        destination: 'https://x.com/simdotai',
+        permanent: false,
+      },
+      {
+        source: '/github',
+        destination: 'https://github.com/simstudioai/sim',
+        permanent: false,
+      },
+      {
+        source: '/team',
+        destination: 'https://cal.com/emirkarabeg/sim-team',
+        permanent: false,
+      }
+    )
+
+    // Redirect /building and /blog to /studio (legacy URL support)
+    redirects.push(
+      {
+        source: '/building/:path*',
+        destination: 'https://sim.ai/studio/:path*',
+        permanent: true,
+      },
+      {
+        source: '/blog/:path*',
+        destination: 'https://sim.ai/studio/:path*',
+        permanent: true,
+      }
+    )
+
+    // Move root feeds to studio namespace
+    redirects.push(
+      {
+        source: '/rss.xml',
+        destination: '/studio/rss.xml',
+        permanent: true,
+      },
+      {
+        source: '/sitemap-images.xml',
+        destination: '/studio/sitemap-images.xml',
+        permanent: true,
+      }
+    )
 
     // Only enable domain redirects for the hosted version
     if (isHosted) {

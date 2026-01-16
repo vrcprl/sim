@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import Link from 'next/link'
-import { getEnv } from '@/lib/env'
+import { getEnv } from '@/lib/core/config/env'
 import { LegalLayout } from '@/app/(landing)/components'
 
 export default function PrivacyPolicy() {
@@ -767,7 +767,7 @@ export default function PrivacyPolicy() {
               privacy@sim.ai
             </Link>
           </li>
-          <li>Mailing Address: Sim, 80 Langton St, San Francisco, CA 94133, USA</li>
+          <li>Mailing Address: Sim, 80 Langton St, San Francisco, CA 94103, USA</li>
         </ul>
         <p>We will respond to your request within a reasonable timeframe.</p>
       </section>
